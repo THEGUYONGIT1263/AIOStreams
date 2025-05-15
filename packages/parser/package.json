@@ -1,6 +1,6 @@
 {
   "name": "@aiostreams/parser",
-  "version": "1.12.3",
+  "version": "1.21.1",
   "main": "./dist/index.js",
   "scripts": {
     "test": "vitest run --passWithNoTests",
@@ -8,6 +8,7 @@
   },
   "description": "Library to parse a torrent filename ",
   "dependencies": {
-    "@aiostreams/types": "^1.0.0"
+    "@aiostreams/types": "^1.0.0",
+    "parse-torrent-title": "github:TheBeastLT/parse-torrent-title"
   }
 }

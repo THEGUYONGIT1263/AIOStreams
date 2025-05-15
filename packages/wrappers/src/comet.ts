@@ -1,8 +1,10 @@
-import { AddonDetail, StreamRequest } from '@aiostreams/types';
+import { AddonDetail, ParseResult, StreamRequest } from '@aiostreams/types';
 import { ParsedStream, Stream, Config } from '@aiostreams/types';
 import { BaseWrapper } from './base';
-import { addonDetails } from '@aiostreams/utils';
+import { addonDetails, createLogger } from '@aiostreams/utils';
 import { Settings } from '@aiostreams/utils';
+
+const logger = createLogger('wrappers');
 
 export class Comet extends BaseWrapper {
   constructor(
@@ -22,28 +24,66 @@ export class Comet extends BaseWrapper {
       url,
       addonId,
       userConfig,
-      indexerTimeout || Settings.DEFAULT_COMET_TIMEOUT
+      indexerTimeout || Settings.DEFAULT_COMET_TIMEOUT,
+      Settings.DEFAULT_COMET_USER_AGENT
+        ? { 'User-Agent': Settings.DEFAULT_COMET_USER_AGENT }
+        : undefined
     );
+  }
+
+  protected parseStream(stream: Stream): ParseResult {
+    const parsedStream = super.parseStream(stream);
+    if (stream.url && parsedStream.type === 'stream') {
+      parsedStream.result.filename = stream.description?.split('\n')[0];
+      if (
+        Settings.FORCE_COMET_HOSTNAME !== undefined ||
+        Settings.FORCE_COMET_PORT !== undefined ||
+        Settings.FORCE_COMET_PROTOCOL !== undefined
+      ) {
+        // modify the URL according to settings, needed when using a local URL for requests but a public stream URL is needed.
+        const url = new URL(stream.url);
+
+        if (Settings.FORCE_COMET_PROTOCOL !== undefined) {
+          url.protocol = Settings.FORCE_COMET_PROTOCOL;
+        }
+        if (Settings.FORCE_COMET_PORT !== undefined) {
+          url.port = Settings.FORCE_COMET_PORT.toString();
+        }
+        if (Settings.FORCE_COMET_HOSTNAME !== undefined) {
+          url.hostname = Settings.FORCE_COMET_HOSTNAME;
+        }
+        parsedStream.result.url = url.toString();
+      }
+    }
+    return parsedStream;
   }
 }
 
-const getCometConfig = (debridService: string, debridApiKey: string) => {
-  return {
-    indexers: ['bitsearch', 'eztv', 'thepiratebay', 'therarbg', 'yts'],
-    maxResults: 0,
-    maxResultsPerResolution: 0,
-    maxSize: 0,
-    reverseResultOrder: false,
-    removeTrash: true,
-    resultFormat: ['All'],
-    resolutions: ['All'],
-    languages: ['All'],
-    debridService: debridService,
-    debridApiKey: debridApiKey,
-    stremthruUrl: '',
-    debridStreamProxyPassword: '',
-  };
-};
+const getCometConfig = (
+  debridService?: string,
+  credentials?: { [key: string]: string }
+): string =>
+  Buffer.from(
+    JSON.stringify({
+      maxResultsPerResolution: 0,
+      maxSize: 0,
+      cachedOnly: false,
+      removeTrash: false,
+      resultFormat: ['all'],
+      debridService: debridService || 'torrent',
+      debridApiKey: debridService
+        ? ['offcloud', 'pikpak'].includes(debridService)
+          ? credentials?.email && credentials?.password
+            ? `${credentials?.email}:${credentials?.password}`
+            : ''
+          : credentials?.apiKey || ''
+        : '',
+      debridStreamProxyPassword: '',
+      languages: { required: [], exclude: [], preferred: [] },
+      resolutions: {},
+      options: { remove_ranks_under: -10000000000 },
+    })
+  ).toString('base64');
 
 export async function getCometStreams(
   config: Config,
@@ -85,9 +125,17 @@ export async function getCometStreams(
     (service) => supportedServices.includes(service.id) && service.enabled
   );
 
-  // if no usable services found, throw an error
+  // if no usable services found, use comet with default config
   if (usableServices.length < 1) {
-    throw new Error('No supported service(s) enabled');
+    const comet = new Comet(
+      getCometConfig(),
+      null,
+      cometOptions.overrideName,
+      addonId,
+      config,
+      indexerTimeout
+    );
+    return await comet.getParsedStreams(streamRequest);
   }
 
   // otherwise, depending on the configuration, create multiple instances of comet or use a single instance with the prioritised service
@@ -108,22 +156,14 @@ export async function getCometStreams(
         'Debrid service not found for ' + cometOptions.prioritiseDebrid
       );
     }
-    if (!debridService.credentials.apiKey) {
+    if (!debridService.credentials) {
       throw new Error(
         'Debrid service API key not found for ' + cometOptions.prioritiseDebrid
       );
     }
 
-    // get the comet config and b64 encode it
-    const cometConfig = getCometConfig(
-      cometOptions.prioritiseDebrid,
-      debridService.credentials.apiKey
-    );
-    const configString = Buffer.from(JSON.stringify(cometConfig)).toString(
-      'base64'
-    );
     const comet = new Comet(
-      configString,
+      getCometConfig(cometOptions.prioritiseDebrid, debridService.credentials),
       null,
       cometOptions.overrideName,
       addonId,
@@ -141,12 +181,9 @@ export async function getCometStreams(
   }
   const errorMessages: string[] = [];
   const streamPromises = servicesToUse.map(async (service) => {
-    const cometConfig = getCometConfig(service.id, service.credentials.apiKey);
-    const configString = Buffer.from(JSON.stringify(cometConfig)).toString(
-      'base64'
-    );
+    logger.info(`Getting Comet streams for ${service.id}`, { func: 'comet' });
     const comet = new Comet(
-      configString,
+      getCometConfig(service.id, service.credentials),
       null,
       cometOptions.overrideName,
       addonId,

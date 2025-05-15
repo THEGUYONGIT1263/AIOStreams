@@ -1,6 +1,6 @@
 {
   "name": "@aiostreams/frontend",
-  "version": "1.12.3",
+  "version": "1.21.1",
   "private": true,
   "scripts": {
     "dev": "next dev",

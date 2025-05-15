@@ -84,7 +84,8 @@
 }
 
 .help {
-  background-color: #353535;
+  background-color: #121212;
+  border: 1px solid #333333;
   border-radius: var(--borderRadius);
   padding: 10px;
   margin: 5px;

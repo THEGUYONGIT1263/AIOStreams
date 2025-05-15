@@ -23,7 +23,10 @@ export class Easynews extends BaseWrapper {
       url,
       addonId,
       userConfig,
-      indexerTimeout || Settings.DEFAULT_EASYNEWS_TIMEMOUT
+      indexerTimeout || Settings.DEFAULT_EASYNEWS_TIMEOUT,
+      Settings.DEFAULT_EASYNEWS_USER_AGENT
+        ? { 'User-Agent': Settings.DEFAULT_EASYNEWS_USER_AGENT }
+        : undefined
     );
   }
 
@@ -37,7 +40,7 @@ export class Easynews extends BaseWrapper {
 }
 
 const getEasynewsConfigString = (username: string, password: string) => {
-  return `%7B%22username%22%3A%22${username}%22%2C%22password%22%3A%22${password}%22%7D`;
+  return `%7B%22username%22%3A%22${encodeURIComponent(username)}%22%2C%22password%22%3A%22${encodeURIComponent(password)}%22%7D`;
 };
 
 export async function getEasynewsStreams(

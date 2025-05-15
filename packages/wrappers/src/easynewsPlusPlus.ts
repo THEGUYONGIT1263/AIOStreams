@@ -1,31 +1,30 @@
-import { ParsedNameData, ParseResult, StreamRequest } from '@aiostreams/types';
-import { parseFilename } from '@aiostreams/parser';
+import { ParseResult, StreamRequest } from '@aiostreams/types';
 import { ParsedStream, Stream, Config } from '@aiostreams/types';
 import { BaseWrapper } from './base';
-import { serviceDetails } from '@aiostreams/utils';
 import { Settings } from '@aiostreams/utils';
 
-export class EasynewsPlus extends BaseWrapper {
+export class EasynewsPlusPlus extends BaseWrapper {
   constructor(
     configString: string | null,
     overrideUrl: string | null,
-    addonName: string = 'Easynews+',
+    addonName: string = 'Easynews++',
     addonId: string,
     userConfig: Config,
     indexerTimeout?: number
   ) {
     let url = overrideUrl
       ? overrideUrl
-      : Settings.EASYNEWS_PLUS_URL + (configString ? configString + '/' : '');
+      : Settings.EASYNEWS_PLUS_PLUS_URL +
+        (configString ? configString + '/' : '');
 
     super(
       addonName,
       url,
       addonId,
       userConfig,
-      indexerTimeout || Settings.DEFAULT_EASYNEWS_PLUS_TIMEOUT,
-      Settings.DEFAULT_EASYNEWS_PLUS_USER_AGENT
-        ? { 'User-Agent': Settings.DEFAULT_EASYNEWS_PLUS_USER_AGENT }
+      indexerTimeout || Settings.DEFAULT_EASYNEWS_PLUS_PLUS_TIMEOUT,
+      Settings.DEFAULT_EASYNEWS_PLUS_PLUS_USER_AGENT
+        ? { 'User-Agent': Settings.DEFAULT_EASYNEWS_PLUS_PLUS_USER_AGENT }
         : undefined
     );
   }
@@ -34,20 +33,40 @@ export class EasynewsPlus extends BaseWrapper {
     const parseResult = super.parseStream(stream);
     if (parseResult.type !== 'error') {
       parseResult.result.type = 'usenet';
+      const ageString = stream.description?.match(/📅\s*(\d+[a-zA-Z])/);
+      parseResult.result.usenet = {
+        age: ageString ? ageString[1] : '',
+      };
     }
     return parseResult;
   }
 }
 
-const getEasynewsPlusConfigString = (username: string, password: string) => {
-  return `%7B%22username%22%3A%22${encodeURIComponent(username)}%22%2C%22password%22%3A%22${encodeURIComponent(password)}%22%2C%22sort1%22%3A%22Size%22%2C%22sort1Direction%22%3A%22Descending%22%2C%22sort2%22%3A%22Relevance%22%2C%22sort2Direction%22%3A%22Descending%22%2C%22sort3%22%3A%22Date%20%26%20Time%22%2C%22sort3Direction%22%3A%22Descending%22%7D`;
+const getEasynewsPlusPlusConfigString = (
+  username: string,
+  password: string,
+  strictTitleMatching: boolean = false
+) => {
+  const options = {
+    uiLanguage: 'eng',
+    username: username,
+    password: password,
+    strictTitleMatching: strictTitleMatching,
+    preferredLanguage: '',
+    sortingPreference: 'quality_first',
+    showQualities: '4k,1080p,720p,480p',
+    maxResultsPerQuality: '',
+    maxFileSize: '',
+  };
+  return encodeURIComponent(JSON.stringify(options));
 };
 
-export async function getEasynewsPlusStreams(
+export async function getEasynewsPlusPlusStreams(
   config: Config,
   easynewsPlusOptions: {
     overrideName?: string;
     overrideUrl?: string;
+    strictTitleMatching?: boolean;
     indexerTimeout?: string;
   },
   streamRequest: StreamRequest,
@@ -56,15 +75,6 @@ export async function getEasynewsPlusStreams(
   addonStreams: ParsedStream[];
   addonErrors: string[];
 }> {
-  // look for the 'easynews' id in the services array and destructure the username and password
-  // if we cant find it, throw an error
-  const easynewsService = serviceDetails.find(
-    (service) => service.id === 'easynews'
-  );
-  if (!easynewsService) {
-    throw new Error('Easynews service not found');
-  }
-
   // check for the presence of the username and password in teh easynewsService.credentials object
   // if not found, throw an error
   const credentails = config.services.find(
@@ -73,13 +83,13 @@ export async function getEasynewsPlusStreams(
   if (!credentails || !credentails.username || !credentails.password) {
     throw new Error('Easynews credentials not found');
   }
-
-  const easynewsPlusConfigString = getEasynewsPlusConfigString(
+  const easynewsPlusConfigString = getEasynewsPlusPlusConfigString(
     credentails.username,
-    credentails.password
+    credentails.password,
+    easynewsPlusOptions.strictTitleMatching
   );
 
-  const easynews = new EasynewsPlus(
+  const easynews = new EasynewsPlusPlus(
     easynewsPlusConfigString,
     easynewsPlusOptions.overrideUrl ?? null,
     easynewsPlusOptions.overrideName,

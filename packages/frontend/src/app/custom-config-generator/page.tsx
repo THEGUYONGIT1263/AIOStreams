@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import styles from './page.module.css';
 import { Slide, ToastContainer, toast, ToastOptions } from 'react-toastify';
+import { isValueEncrypted } from '@aiostreams/utils';
 
 interface CustomConfig {
   key: string;
@@ -33,10 +34,6 @@ const showToast = (
   });
 };
 
-const isEncrypted = (value: string): boolean => {
-  return value.match(/^E-[0-9a-fA-F]{32}-[0-9a-fA-F]+$/) !== null;
-};
-
 const isValidBase64 = (value: string): boolean => {
   try {
     JSON.parse(atob(value));
@@ -46,8 +43,17 @@ const isValidBase64 = (value: string): boolean => {
   }
 };
 
+const isValidBase64Compressed = (value: string): boolean => {
+  if (value.startsWith('B-')) return true;
+  return false;
+};
+
 const isValidConfigFormat = (value: string): boolean => {
-  return value ? isEncrypted(value) || isValidBase64(value) : false;
+  return value
+    ? isValueEncrypted(value) ||
+        isValidBase64(value) ||
+        isValidBase64Compressed(value)
+    : false;
 };
 
 const handleCopyEvent = (text: string) => {
@@ -103,6 +109,17 @@ export default function CustomConfigGenerator() {
   });
   const [output, setOutput] = useState<string | null>(null);
 
+  const extractConfigValue = (value: string): string => {
+    try {
+      const url = new URL(value);
+      const pathParts = url.pathname.split('/');
+      const longUniqueId = pathParts[pathParts.length - 2];
+      return longUniqueId;
+    } catch {
+      return value;
+    }
+  };
+
   const validateKeyValuePair = (key: string, value: string) => {
     if (!key || !value) {
       showToast('Both key and value are required.', 'error', 'requiredFields');
@@ -120,11 +137,15 @@ export default function CustomConfigGenerator() {
   };
 
   const handleAddRow = () => {
-    if (!validateKeyValuePair(newConfig.key, newConfig.value)) return;
+    if (
+      !validateKeyValuePair(newConfig.key, extractConfigValue(newConfig.value))
+    )
+      return;
     if (configs.some((config) => config.key === newConfig.key)) {
       showToast('Key already exists.', 'error', 'uniqueKeyConstraintViolation');
       return false;
     }
+    newConfig.value = extractConfigValue(newConfig.value);
     setConfigs([...configs, newConfig]);
     setNewConfig({ key: '', value: '' });
   };
@@ -185,8 +206,7 @@ export default function CustomConfigGenerator() {
           <h2 style={{ padding: '5px' }}>Your Configurations</h2>
           <p style={{ padding: '5px' }}>
             Add your configurations below. Put the name of the configuration in
-            the key field and the value in the value field. The value will be
-            either the base64 encoded value or your encrypted string.
+            the key field and the manifest URL in the value field.
           </p>
           <div className={styles.help}>
             <h3
@@ -199,21 +219,10 @@ export default function CustomConfigGenerator() {
               How to get the config value?
             </h3>
             <p style={{ textAlign: 'left' }}>
-              Once you have your manifest URL by clicking the{' '}
-              <code>Copy URL</code> button at the configuration page, it will be
-              in the format:
-              <br />
-              <br />
-              <code>
-                https://your-aiostreams-url/
-                <span style={{ color: 'rgb(255, 0, 0)' }}>long-unique-id</span>
-                /manifest.json
-              </code>
-              <br />
-              <br />
-              You want to copy <strong>ALL</strong> of the{' '}
-              <code>long-unique-id</code> part of the URL and paste it into the
-              value field. Then, click the add icon.
+              Once you have configured AIOStreams, upon clicking the{' '}
+              <code>Generate Manifest URL</code> button, make sure to click the{' '}
+              <code>Copy URL</code> button at the configuration page. You then
+              paste that URL in the value field below.
             </p>
           </div>
 

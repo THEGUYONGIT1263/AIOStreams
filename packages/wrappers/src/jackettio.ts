@@ -1,8 +1,10 @@
-import { AddonDetail, StreamRequest } from '@aiostreams/types';
+import { AddonDetail, ParseResult, StreamRequest } from '@aiostreams/types';
 import { ParsedStream, Config } from '@aiostreams/types';
 import { BaseWrapper } from './base';
-import { addonDetails } from '@aiostreams/utils';
+import { addonDetails, createLogger } from '@aiostreams/utils';
 import { Settings } from '@aiostreams/utils';
+
+const logger = createLogger('wrappers');
 
 // name, title, url
 export class Jackettio extends BaseWrapper {
@@ -23,8 +25,37 @@ export class Jackettio extends BaseWrapper {
       url,
       addonId,
       userConfig,
-      indexerTimeout || Settings.DEFAULT_JACKETTIO_TIMEOUT
+      indexerTimeout || Settings.DEFAULT_JACKETTIO_TIMEOUT,
+      Settings.DEFAULT_JACKETTIO_USER_AGENT
+        ? { 'User-Agent': Settings.DEFAULT_JACKETTIO_USER_AGENT }
+        : undefined
     );
+  }
+
+  protected parseStream(stream: { [key: string]: any }): ParseResult {
+    const parsedStream = super.parseStream(stream);
+    if (stream.url && parsedStream.type === 'stream') {
+      if (
+        Settings.FORCE_JACKETTIO_HOSTNAME !== undefined ||
+        Settings.FORCE_JACKETTIO_PORT !== undefined ||
+        Settings.FORCE_JACKETTIO_PROTOCOL !== undefined
+      ) {
+        // modify the URL according to settings, needed when using a local URL for requests but a public stream URL is needed.
+        const url = new URL(stream.url);
+
+        if (Settings.FORCE_JACKETTIO_PROTOCOL !== undefined) {
+          url.protocol = Settings.FORCE_JACKETTIO_PROTOCOL;
+        }
+        if (Settings.FORCE_JACKETTIO_PORT !== undefined) {
+          url.port = Settings.FORCE_JACKETTIO_PORT.toString();
+        }
+        if (Settings.FORCE_JACKETTIO_HOSTNAME !== undefined) {
+          url.hostname = Settings.FORCE_JACKETTIO_HOSTNAME;
+        }
+        parsedStream.result.url = url.toString();
+      }
+    }
+    return parsedStream;
   }
 }
 
@@ -38,6 +69,7 @@ const getJackettioConfigString = (
       priotizePackTorrents: 2,
       excludeKeywords: [],
       debridId: debridService,
+      debridApiKey: debridApiKey,
       hideUncached: false,
       sortCached: [
         ['quality', true],
@@ -52,9 +84,10 @@ const getJackettioConfigString = (
       mediaflowProxyUrl: '',
       mediaflowApiPassword: '',
       mediaflowPublicIp: '',
+      useStremThru: true,
+      stremthruUrl: Settings.DEFAULT_JACKETTIO_STREMTHRU_URL,
       qualities: [0, 360, 480, 720, 1080, 2160],
-      indexers: ['bitsearch', 'eztv', 'thepiratebay', 'therarbg', 'yts'],
-      debridApiKey: debridApiKey,
+      indexers: Settings.DEFAULT_JACKETTIO_INDEXERS,
     })
   ).toString('base64');
 };
@@ -156,6 +189,9 @@ export async function getJackettioStreams(
   }
 
   const streamPromises = servicesToUse.map(async (service) => {
+    logger.info(`Getting Jackettio streams for ${service.name}`, {
+      func: 'jackettio',
+    });
     const configString = getJackettioConfigString(
       service.id,
       service.credentials.apiKey

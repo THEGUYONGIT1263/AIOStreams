@@ -28,12 +28,20 @@ import {
   allowedLanguages,
   validateConfig,
 } from '@aiostreams/config';
-import { addonDetails, serviceDetails, Settings } from '@aiostreams/utils';
+import {
+  addonDetails,
+  isValueEncrypted,
+  serviceDetails,
+  Settings,
+} from '@aiostreams/utils';
 
 import Slider from '@/components/Slider';
 import CredentialInput from '@/components/CredentialInput';
 import CreateableSelect from '@/components/CreateableSelect';
 import MultiSelect from '@/components/MutliSelect';
+import InstallWindow from '@/components/InstallWindow';
+import FormatterPreview from '@/components/FormatterPreview';
+import CustomFormatter from '@/components/CustomFormatter';
 
 const version = addonPackage.version;
 
@@ -68,6 +76,7 @@ const defaultVisualTags: VisualTag[] = [
   { '3D': true },
   { IMAX: true },
   { AI: true },
+  { SDR: true },
 ];
 
 const defaultAudioTags: AudioTag[] = [
@@ -97,6 +106,7 @@ const defaultEncodes: Encode[] = [
 
 const defaultSortCriteria: SortBy[] = [
   { cached: true, direction: 'desc' },
+  { personal: true, direction: 'desc' },
   { resolution: true },
   { language: true },
   { size: true, direction: 'desc' },
@@ -108,10 +118,12 @@ const defaultSortCriteria: SortBy[] = [
   { quality: false },
   { seeders: false, direction: 'desc' },
   { addon: false },
+  { regexSort: false, direction: 'desc' },
 ];
 
 const defaultResolutions: Resolution[] = [
   { '2160p': true },
+  { '1440p': true },
   { '1080p': true },
   { '720p': true },
   { '480p': true },
@@ -166,8 +178,6 @@ export default function Configure() {
   const [minMovieSize, setMinMovieSize] = useState<number | null>(null);
   const [maxEpisodeSize, setMaxEpisodeSize] = useState<number | null>(null);
   const [minEpisodeSize, setMinEpisodeSize] = useState<number | null>(null);
-  const [addonNameInDescription, setAddonNameInDescription] =
-    useState<boolean>(false);
   const [cleanResults, setCleanResults] = useState<boolean>(false);
   const [maxResultsPerResolution, setMaxResultsPerResolution] = useState<
     number | null
@@ -191,17 +201,64 @@ export default function Configure() {
   const [mediaFlowProxiedServices, setMediaFlowProxiedServices] = useState<
     string[] | null
   >(null);
-  const [disableButtons, setDisableButtons] = useState<boolean>(false);
-  const [manualManifestUrl, setManualManifestUrl] = useState<string | null>(
-    null
-  );
 
-  const getChoosableAddons = () => {
-    return addonDetails.map((addon) => addon.id);
-  };
+  const [stremThruEnabled, setStremThruEnabled] = useState<boolean>(false);
+  const [stremThruUrl, setStremThruUrl] = useState<string>('');
+  const [stremThruCredential, setStremThruCredential] = useState<string>('');
+  const [stremThruPublicIp, setStremThruPublicIp] = useState<string>('');
+  const [stremThruProxiedAddons, setStremThruProxiedAddons] = useState<
+    string[] | null
+  >(null);
+  const [stremThruProxiedServices, setStremThruProxiedServices] = useState<
+    string[] | null
+  >(null);
+
+  const [overrideName, setOverrideName] = useState<string>('');
+  const [apiKey, setApiKey] = useState<string>('');
+
+  const [disableButtons, setDisableButtons] = useState<boolean>(false);
+  const [maxMovieSizeSlider, setMaxMovieSizeSlider] = useState<number>(
+    Settings.MAX_MOVIE_SIZE
+  );
+  const [maxEpisodeSizeSlider, setMaxEpisodeSizeSlider] = useState<number>(
+    Settings.MAX_EPISODE_SIZE
+  );
+  const [choosableAddons, setChoosableAddons] = useState<string[]>(
+    addonDetails.map((addon) => addon.id)
+  );
+  const [showApiKeyInput, setShowApiKeyInput] = useState<boolean>(false);
+  const [manifestUrl, setManifestUrl] = useState<string | null>(null);
+  const [regexFilters, setRegexFilters] = useState<{
+    excludePattern?: string;
+    includePattern?: string;
+  }>({});
+  const [regexSortPatterns, setRegexSortPatterns] = useState<string>('');
+
+  useEffect(() => {
+    // get config from the server
+    fetch('/get-addon-config')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success) {
+          setMaxMovieSizeSlider(data.maxMovieSize);
+          setMaxEpisodeSizeSlider(data.maxEpisodeSize);
+          setShowApiKeyInput(data.apiKeyRequired);
+          // filter out 'torrentio' from choosableAddons if torrentioDisabled is true
+          if (data.torrentioDisabled) {
+            setChoosableAddons(
+              addonDetails
+                .map((addon) => addon.id)
+                .filter((id) => id !== 'torrentio')
+            );
+          }
+        }
+      });
+  }, []);
 
   const createConfig = (): Config => {
-    return {
+    const config = {
+      apiKey: apiKey,
+      overrideName,
       streamTypes,
       resolutions,
       qualities,
@@ -216,7 +273,6 @@ export default function Configure() {
       minMovieSize,
       maxEpisodeSize,
       minEpisodeSize,
-      addonNameInDescription,
       cleanResults,
       maxResultsPerResolution,
       strictIncludeFilters:
@@ -229,22 +285,39 @@ export default function Configure() {
           : null,
       formatter: formatter || 'gdrive',
       mediaFlowConfig: {
-        mediaFlowEnabled,
+        mediaFlowEnabled: mediaFlowEnabled && !stremThruEnabled,
         proxyUrl: mediaFlowProxyUrl,
         apiPassword: mediaFlowApiPassword,
         publicIp: mediaFlowPublicIp,
         proxiedAddons: mediaFlowProxiedAddons,
         proxiedServices: mediaFlowProxiedServices,
       },
+      stremThruConfig: {
+        stremThruEnabled: stremThruEnabled && !mediaFlowEnabled,
+        url: stremThruUrl,
+        credential: stremThruCredential,
+        publicIp: stremThruPublicIp,
+        proxiedAddons: stremThruProxiedAddons,
+        proxiedServices: stremThruProxiedServices,
+      },
       addons,
       services,
+      regexFilters:
+        regexFilters.excludePattern || regexFilters.includePattern
+          ? {
+              excludePattern: regexFilters.excludePattern || undefined,
+              includePattern: regexFilters.includePattern || undefined,
+            }
+          : undefined,
+      regexSortPatterns: regexSortPatterns,
     };
+    return config;
   };
 
   const fetchWithTimeout = async (
     url: string,
     options: RequestInit | undefined,
-    timeoutMs = 5000
+    timeoutMs = 30000
   ) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -262,8 +335,20 @@ export default function Configure() {
   const getManifestUrl = async (
     protocol = window.location.protocol,
     root = window.location.host
-  ) => {
+  ): Promise<{
+    success: boolean;
+    manifest: string | null;
+    message: string | null;
+  }> => {
     const config = createConfig();
+    const { valid, errorMessage } = validateConfig(config, 'client');
+    if (!valid) {
+      return {
+        success: false,
+        manifest: null,
+        message: errorMessage || 'Invalid config',
+      };
+    }
     console.log('Config', config);
     setDisableButtons(true);
 
@@ -290,207 +375,25 @@ export default function Configure() {
           return {
             success: false,
             manifest: null,
-            message: data.error,
+            message: data.error || 'Failed to generate config',
           };
         }
         throw new Error(`Encryption service failed, ${data.message}`);
       }
 
-      const encryptedConfig = data.data;
+      const configString = data.data;
       return {
         success: true,
-        manifest: `${protocol}//${root}/${encryptedConfig}/manifest.json`,
+        manifest: `${protocol}//${root}/${configString}/manifest.json`,
+        message: null,
       };
     } catch (error: any) {
-      console.error(
-        'Error during encryption:',
-        error.message,
-        '\nFalling back to base64 encoding'
-      );
-      try {
-        const base64Config = btoa(JSON.stringify(config));
-        return {
-          success: true,
-          manifest: `${protocol}//${root}/${base64Config}/manifest.json`,
-        };
-      } catch (base64Error: any) {
-        console.error('Error during base64 encoding:', base64Error.message);
-        return {
-          success: false,
-          manifest: null,
-          message: 'Failed to encode config',
-        };
-      }
-    }
-  };
-
-  const createAndValidateConfig = () => {
-    const config = createConfig();
-
-    const { valid, errorCode, errorMessage } = validateConfig(config);
-    console.log('Config', config, 'was valid:', valid);
-    if (!valid) {
-      showToast(
-        errorMessage || 'Invalid config',
-        'error',
-        errorCode || 'error'
-      );
-      return false;
-    }
-    return true;
-  };
-
-  const handleInstall = async (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    if (createAndValidateConfig()) {
-      const id = toast.loading('Generating manifest URL...', {
-        ...toastOptions,
-        toastId: 'generatingManifestUrl',
-      });
-      const manifestUrl = await getManifestUrl();
-      if (!manifestUrl.success || !manifestUrl.manifest) {
-        setDisableButtons(false);
-        toast.update(id, {
-          render: manifestUrl.message || 'Failed to generate manifest URL',
-          type: 'error',
-          autoClose: 5000,
-          isLoading: false,
-        });
-        return;
-      }
-
-      const stremioUrl = manifestUrl.manifest.replace(/^https?/, 'stremio');
-
-      try {
-        const wp = window.open(stremioUrl, '_blank');
-        if (!wp) {
-          throw new Error('Failed to open window');
-        }
-        toast.update(id, {
-          render: 'Successfully generated manifest URL',
-          type: 'success',
-          autoClose: 5000,
-          isLoading: false,
-        });
-        setManualManifestUrl(null);
-      } catch (error) {
-        console.error('Failed to open Stremio', error);
-        toast.update(id, {
-          render:
-            'Failed to open Stremio with manifest URL. The link can be opened manually at the bottom of this page.',
-          type: 'error',
-          autoClose: 5000,
-          isLoading: false,
-        });
-        setManualManifestUrl(stremioUrl);
-      }
-      setDisableButtons(false);
-    }
-  };
-
-  const handleInstallToWeb = async (
-    event: React.MouseEvent<HTMLButtonElement>
-  ) => {
-    event.preventDefault();
-    if (createAndValidateConfig()) {
-      const id = toast.loading('Generating manifest URL...', toastOptions);
-      const manifestUrl = await getManifestUrl();
-      if (!manifestUrl.success || !manifestUrl.manifest) {
-        toast.update(id, {
-          render: manifestUrl.message || 'Failed to generate manifest URL',
-          type: 'error',
-          autoClose: 5000,
-          isLoading: false,
-        });
-        setDisableButtons(false);
-        return;
-      }
-
-      const encodedManifestUrl = encodeURIComponent(manifestUrl.manifest);
-
-      try {
-        const wp = window.open(
-          `https://web.stremio.com/#/addons?addon=${encodedManifestUrl}`,
-          '_blank'
-        );
-        if (!wp) {
-          throw new Error('Failed to open window');
-        }
-        toast.update(id, {
-          render: 'Successfully generated manifest URL and opened Stremio web',
-          type: 'success',
-          autoClose: 5000,
-          isLoading: false,
-        });
-        setManualManifestUrl(null);
-      } catch (error) {
-        console.error('Failed to open Stremio web', error);
-        toast.update(id, {
-          render:
-            'Failed to open Stremio web with manifest URL. The link can be opened manually at the bottom of this page.',
-          type: 'error',
-          autoClose: 5000,
-          isLoading: false,
-        });
-        setManualManifestUrl(
-          `https://web.stremio.com/#/addons?addon=${encodedManifestUrl}`
-        );
-      }
-      setDisableButtons(false);
-    }
-  };
-
-  const handleCopyLink = async (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    if (createAndValidateConfig()) {
-      const id = toast.loading('Generating manifest URL...', toastOptions);
-      const manifestUrl = await getManifestUrl();
-      if (!manifestUrl.success || !manifestUrl.manifest) {
-        toast.update(id, {
-          render: manifestUrl.message || 'Failed to generate manifest URL',
-          type: 'error',
-          autoClose: 5000,
-          isLoading: false,
-        });
-        setDisableButtons(false);
-        return;
-      }
-      if (!navigator.clipboard) {
-        toast.update(id, {
-          render:
-            'Clipboard not available. The link can be copied manually at the bottom of this page.',
-          type: 'error',
-          autoClose: 3000,
-          isLoading: false,
-        });
-        setManualManifestUrl(manifestUrl.manifest);
-        setDisableButtons(false);
-        return;
-      }
-      navigator.clipboard
-        .writeText(manifestUrl.manifest)
-        .then(() => {
-          toast.update(id, {
-            render: 'Manifest URL copied to clipboard',
-            type: 'success',
-            autoClose: 5000,
-            toastId: 'copiedManifestUrl',
-            isLoading: false,
-          });
-          setManualManifestUrl(null);
-        })
-        .catch((err: any) => {
-          console.error('Failed to copy manifest URL to clipboard', err);
-          toast.update(id, {
-            render:
-              'Failed to copy manifest URL to clipboard. The link can be copied manually at the bottom of this page.',
-            type: 'error',
-            autoClose: 3000,
-            isLoading: false,
-          });
-          setManualManifestUrl(manifestUrl.manifest);
-        });
-      setDisableButtons(false);
+      console.error(error);
+      return {
+        success: false,
+        manifest: null,
+        message: error.message || 'Failed to encrypt config',
+      };
     }
   };
 
@@ -614,16 +517,19 @@ export default function Configure() {
   useEffect(() => {
     async function decodeConfig(config: string) {
       let decodedConfig: Config;
-      if (config.startsWith('E-')) {
+      if (isValueEncrypted(config) || config.startsWith('B-')) {
         throw new Error('Encrypted Config Not Supported');
       } else {
-        decodedConfig = JSON.parse(atob(config));
+        decodedConfig = JSON.parse(
+          Buffer.from(decodeURIComponent(config), 'base64').toString('utf-8')
+        );
       }
       return decodedConfig;
     }
 
     function loadFromConfig(decodedConfig: Config) {
       console.log('Loaded config', decodedConfig);
+      setOverrideName(decodedConfig.overrideName || '');
       setStreamTypes(
         loadValidValuesFromObject(decodedConfig.streamTypes, defaultStreamTypes)
       );
@@ -672,9 +578,9 @@ export default function Configure() {
           value: filter,
         })) || []
       );
-      setFormatter(
-        validateValue(decodedConfig.formatter, allowedFormatters) || 'gdrive'
-      );
+      setRegexFilters(decodedConfig.regexFilters || {});
+      setRegexSortPatterns(decodedConfig.regexSortPatterns || '');
+
       setServices(loadValidServices(decodedConfig.services));
       setMaxMovieSize(
         decodedConfig.maxMovieSize || decodedConfig.maxSize || null
@@ -689,7 +595,6 @@ export default function Configure() {
         decodedConfig.minEpisodeSize || decodedConfig.minSize || null
       );
       setAddons(loadValidAddons(decodedConfig.addons));
-      setAddonNameInDescription(decodedConfig.addonNameInDescription || false);
       setCleanResults(decodedConfig.cleanResults || false);
       setMaxResultsPerResolution(decodedConfig.maxResultsPerResolution || null);
       setMediaFlowEnabled(
@@ -704,6 +609,27 @@ export default function Configure() {
       setMediaFlowProxiedServices(
         decodedConfig.mediaFlowConfig?.proxiedServices || null
       );
+      setStremThruEnabled(
+        decodedConfig.stremThruConfig?.stremThruEnabled || false
+      );
+      setStremThruUrl(decodedConfig.stremThruConfig?.url || '');
+      setStremThruCredential(decodedConfig.stremThruConfig?.credential || '');
+      setStremThruPublicIp(decodedConfig.stremThruConfig?.publicIp || '');
+      setApiKey(decodedConfig.apiKey || '');
+
+      // set formatter
+      const formatterValue = validateValue(
+        decodedConfig.formatter,
+        allowedFormatters
+      );
+      if (
+        decodedConfig.formatter.startsWith('custom') &&
+        decodedConfig.formatter.length > 7
+      ) {
+        setFormatter(decodedConfig.formatter);
+      } else if (formatterValue) {
+        setFormatter(formatterValue);
+      }
     }
 
     const path = window.location.pathname;
@@ -769,7 +695,26 @@ export default function Configure() {
             style={{ display: 'block', margin: '0 auto' }}
           />
           <div style={{ position: 'relative', display: 'inline-block' }}>
-            <h1 style={{ textAlign: 'center' }}>AIOStreams</h1>
+            <input
+              type="text"
+              value={overrideName || 'AIOStreams'}
+              onChange={(e) => setOverrideName(e.target.value)}
+              style={{
+                border: 'none',
+                backgroundColor: 'black',
+                color: 'white',
+                fontWeight: 'bold',
+                background: 'black',
+                height: '30px',
+                textAlign: 'center',
+                fontSize: '30px',
+                padding: '0',
+                maxWidth: '300px',
+                width: 'auto',
+                margin: '0 auto',
+              }}
+              size={overrideName?.length < 8 ? 8 : overrideName?.length || 8}
+            ></input>
             <span
               className={styles.version}
               title={`See what's new in v${version}`}
@@ -937,7 +882,7 @@ export default function Configure() {
         <div className={styles.section}>
           <h2 style={{ padding: '5px' }}>Addons</h2>
           <AddonsList
-            choosableAddons={getChoosableAddons()}
+            choosableAddons={choosableAddons}
             addonDetails={addonDetails}
             addons={addons}
             setAddons={setAddons}
@@ -1095,6 +1040,110 @@ export default function Configure() {
           </div>
         </div>
 
+        {showApiKeyInput && (
+          <div className={styles.section}>
+            <div>
+              <h2 style={{ padding: '5px', margin: '0px ' }}>
+                Regex Filtering
+              </h2>
+              <p style={{ margin: '5px 0 12px 5px' }}>
+                Configure regex patterns to filter streams. These filters will
+                be applied in addition to keyword filters.
+              </p>
+            </div>
+            <div style={{ marginBottom: '0px' }}>
+              <div className={styles.section}>
+                <h3 style={{ margin: '2px 0 2px 0' }}>Exclude Pattern</h3>
+                <p style={{ margin: '10px 0 10px 0' }}>
+                  Enter a regex pattern to exclude streams. Streams will be
+                  excluded if their filename OR indexers match this pattern.
+                </p>
+                <input
+                  type="text"
+                  value={regexFilters.excludePattern || ''}
+                  onChange={(e) =>
+                    setRegexFilters({
+                      ...regexFilters,
+                      excludePattern: e.target.value,
+                    })
+                  }
+                  placeholder="Example: \b(0neshot|1XBET)\b"
+                  className={styles.input}
+                />
+                <p className={styles.helpText}>
+                  Example patterns:
+                  <br />
+                  - \b(0neshot|1XBET|24xHD)\b (exclude 0neshot, 1XBET, and 24xHD
+                  releases)
+                  <br />- ^.*Hi10.*$ (exclude Hi10 profile releases)
+                </p>
+              </div>
+              <div className={styles.section} style={{ marginBottom: '0px' }}>
+                <h3 style={{ margin: '2px 0 2px 0' }}>Include Pattern</h3>
+                <p style={{ margin: '10px 0 10px 0' }}>
+                  Enter a regex pattern to include streams. Only streams whose
+                  filename or indexers match this pattern will be included.
+                </p>
+                <input
+                  type="text"
+                  value={regexFilters.includePattern || ''}
+                  onChange={(e) =>
+                    setRegexFilters({
+                      ...regexFilters,
+                      includePattern: e.target.value,
+                    })
+                  }
+                  placeholder="Example: \b(3L|BiZKiT)\b"
+                  className={styles.input}
+                />
+                <p className={styles.helpText}>
+                  Example patterns:
+                  <br />- \b(3L|BiZKiT|BLURANiUM)\b (only include 3L, BiZKiT,
+                  and BLURANiUM releases)
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showApiKeyInput && (
+          <div className={styles.section}>
+            <h2 style={{ padding: '5px' }}>Regex Sort Patterns</h2>
+            <p style={{ padding: '5px' }}>
+              Enter a space separated list of regex patterns, optionally with a
+              name, to sort streams by. Streams will be sorted based on the
+              order of matching patterns. Matching files will come first in
+              descending order, and last in ascending order for each pattern.
+              You can give each regex a name using the following syntax:
+              <br />
+              <br />
+              <code>regexName{`<::>`}regexPattern</code>
+              <br />
+              <br />
+              For example, <code>3L{`<::>`}\b(3L|BiZKiT)\b</code> will sort
+              streams matching the regex <code>\b(3L|BiZKiT)\b</code> first and
+              those streams will have the <code>{`regexMatched`}</code> property
+              with the value <code>3L</code> in the custom formatter.
+            </p>
+            <input
+              type="text"
+              value={regexSortPatterns}
+              onChange={(e) => setRegexSortPatterns(e.target.value)}
+              placeholder="Example: \b(3L|BiZKiT)\b \b(FraMeSToR)\b"
+              style={{
+                width: '97.5%',
+                padding: '5px',
+                marginLeft: '5px',
+              }}
+              className={styles.input}
+            />
+            <p className={styles.helpText}>
+              Example patterns:
+              <br />- \b(3L|BiZKiT|BLURANiUM)\b \b(FraMeSToR)\b (sort
+              3L/BiZKiT/BLURANiUM releases first, then FraMeSToR releases)
+            </p>
+          </div>
+        )}
         <div className={styles.section}>
           <div className={styles.slidersSetting}>
             <div>
@@ -1106,7 +1155,7 @@ export default function Configure() {
             </div>
             <div className={styles.slidersContainer}>
               <Slider
-                maxValue={Settings.MAX_MOVIE_SIZE}
+                maxValue={maxMovieSizeSlider}
                 value={minMovieSize || 0}
                 setValue={setMinMovieSize}
                 defaultValue="min"
@@ -1116,9 +1165,9 @@ export default function Configure() {
                 Minimum movie size: {formatSize(minMovieSize || 0)}
               </div>
               <Slider
-                maxValue={Settings.MAX_MOVIE_SIZE}
+                maxValue={maxMovieSizeSlider}
                 value={
-                  maxMovieSize === null ? Settings.MAX_MOVIE_SIZE : maxMovieSize
+                  maxMovieSize === null ? maxMovieSizeSlider : maxMovieSize
                 }
                 setValue={setMaxMovieSize}
                 defaultValue="max"
@@ -1129,7 +1178,7 @@ export default function Configure() {
                 {maxMovieSize === null ? 'Unlimited' : formatSize(maxMovieSize)}
               </div>
               <Slider
-                maxValue={Settings.MAX_EPISODE_SIZE}
+                maxValue={maxEpisodeSizeSlider}
                 value={minEpisodeSize || 0}
                 setValue={setMinEpisodeSize}
                 defaultValue="min"
@@ -1139,10 +1188,10 @@ export default function Configure() {
                 Minimum episode size: {formatSize(minEpisodeSize || 0)}
               </div>
               <Slider
-                maxValue={Settings.MAX_EPISODE_SIZE}
+                maxValue={maxEpisodeSizeSlider}
                 value={
                   maxEpisodeSize === null
-                    ? Settings.MAX_EPISODE_SIZE
+                    ? maxEpisodeSizeSlider
                     : maxEpisodeSize
                 }
                 setValue={setMaxEpisodeSize}
@@ -1212,7 +1261,7 @@ export default function Configure() {
             </div>
             <div className={styles.settingInput}>
               <select
-                value={formatter}
+                value={formatter?.startsWith('custom') ? 'custom' : formatter}
                 onChange={(e) => setFormatter(e.target.value)}
               >
                 {formatterOptions.map((formatter) => (
@@ -1223,34 +1272,13 @@ export default function Configure() {
               </select>
             </div>
           </div>
-        </div>
-
-        <div className={styles.section}>
-          <div className={styles.setting}>
-            <div className={styles.settingDescription}>
-              <h2 style={{ padding: '5px' }}>Move Addon Name to Description</h2>
-              <p style={{ padding: '5px' }}>
-                Move the addon name to the description of the stream. This will
-                show <code>AIOStreams</code> as the stream title, but move the
-                name of the addon that the stream is from to the description.
-                This is useful for Vidi users.
-              </p>
-            </div>
-            <div className={styles.checkboxSettingInput}>
-              <input
-                type="checkbox"
-                checked={addonNameInDescription}
-                onChange={(e) => setAddonNameInDescription(e.target.checked)}
-                // move to the right
-                style={{
-                  marginLeft: 'auto',
-                  marginRight: '20px',
-                  width: '25px',
-                  height: '25px',
-                }}
-              />
-            </div>
-          </div>
+          {formatter?.startsWith('custom') && (
+            <CustomFormatter
+              formatter={formatter}
+              setFormatter={setFormatter}
+            />
+          )}
+          <FormatterPreview formatter={formatter || 'gdrive'} />
         </div>
 
         <div className={styles.section}>
@@ -1293,7 +1321,8 @@ export default function Configure() {
             <div className={styles.settingInput}>
               <input
                 type="checkbox"
-                checked={mediaFlowEnabled}
+                checked={mediaFlowEnabled && !stremThruEnabled}
+                disabled={stremThruEnabled}
                 onChange={(e) => {
                   setMediaFlowEnabled(e.target.checked);
                 }}
@@ -1435,51 +1464,230 @@ export default function Configure() {
           }
         </div>
 
-        <div className={styles.installButtons}>
-          <button
-            onClick={handleInstall}
-            className={styles.installButton}
-            disabled={disableButtons}
-          >
-            Install
-          </button>
-          <button
-            onClick={handleInstallToWeb}
-            className={styles.installButton}
-            disabled={disableButtons}
-          >
-            Install to Stremio Web
-          </button>
-          <button
-            onClick={handleCopyLink}
-            className={styles.installButton}
-            disabled={disableButtons}
-          >
-            Copy Link
-          </button>
-          {manualManifestUrl && (
-            <>
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
+        <div className={styles.section}>
+          <div className={styles.setting}>
+            <div className={styles.settingDescription}>
+              <h2 style={{ padding: '5px' }}>StremThru</h2>
+              <p style={{ padding: '5px' }}>
+                Use StremThru to proxy your streams
+              </p>
+            </div>
+            <div className={styles.settingInput}>
+              <input
+                type="checkbox"
+                checked={stremThruEnabled && !mediaFlowEnabled}
+                disabled={mediaFlowEnabled}
+                onChange={(e) => {
+                  setStremThruEnabled(e.target.checked);
                 }}
-              >
+                style={{
+                  width: '25px',
+                  height: '25px',
+                }}
+              />
+            </div>
+          </div>
+          {
+            <div
+              className={`${styles.stremThruConfig} ${stremThruEnabled ? '' : styles.hidden}`}
+            >
+              <div className={styles.stremThruSection}>
+                <div>
+                  <div>
+                    <h3 style={{ padding: '5px' }}>StremThru URL</h3>
+                    <p style={{ padding: '5px' }}>
+                      The URL of the StremThru server
+                    </p>
+                  </div>
+                  <div>
+                    <CredentialInput
+                      credential={stremThruUrl}
+                      setCredential={setStremThruUrl}
+                      inputProps={{
+                        placeholder: 'Enter your StremThru URL',
+                        disabled: !stremThruEnabled,
+                      }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div>
+                    <h3 style={{ padding: '5px' }}>Credential</h3>
+                    <p style={{ padding: '5px' }}>Your StremThru Credential</p>
+                  </div>
+                  <div>
+                    <CredentialInput
+                      credential={stremThruCredential}
+                      setCredential={setStremThruCredential}
+                      inputProps={{
+                        placeholder: 'Enter your StremThru Credential',
+                        disabled: !stremThruEnabled,
+                      }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div>
+                    <h3 style={{ padding: '5px' }}>Public IP (Optional)</h3>
+                    <p style={{ padding: '5px' }}>
+                      Set the publicly exposed IP for StremThru server.
+                    </p>
+                  </div>
+                  <div>
+                    <CredentialInput
+                      credential={stremThruPublicIp}
+                      setCredential={setStremThruPublicIp}
+                      inputProps={{
+                        placeholder: 'Enter your StremThru public IP',
+                        disabled: !stremThruEnabled,
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className={styles.stremThruSection}>
+                <div>
+                  <div>
+                    <h3 style={{ padding: '5px' }}>Proxy Addons (Optional)</h3>
+                    <p style={{ padding: '5px' }}>
+                      By default, all streams from every addon are proxied.
+                      Choose specific addons here to proxy only their streams.
+                    </p>
+                  </div>
+                  <div>
+                    <MultiSelect
+                      options={
+                        addons.map((addon) => ({
+                          value: `${addon.id}-${JSON.stringify(addon.options)}`,
+                          label:
+                            addon.options.addonName ||
+                            addon.options.overrideName ||
+                            addon.options.name ||
+                            addon.id.charAt(0).toUpperCase() +
+                              addon.id.slice(1),
+                        })) || []
+                      }
+                      setValues={(selectedAddons) => {
+                        setStremThruProxiedAddons(
+                          selectedAddons.length === 0 ? null : selectedAddons
+                        );
+                      }}
+                      values={stremThruProxiedAddons || undefined}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div>
+                    <h3 style={{ padding: '5px' }}>
+                      Proxy Services (Optional)
+                    </h3>
+                    <p style={{ padding: '5px' }}>
+                      By default, all streams whether they are from a serivce or
+                      not are proxied. Choose which services you want to proxy
+                      through StremThru. Selecting None will also proxy streams
+                      that are not (detected to be) from a service.
+                    </p>
+                  </div>
+                  <div>
+                    <MultiSelect
+                      options={[
+                        { value: 'none', label: 'None' },
+                        ...serviceDetails.map((service) => ({
+                          value: service.id,
+                          label: service.name,
+                        })),
+                      ]}
+                      setValues={(selectedServices) => {
+                        setStremThruProxiedServices(
+                          selectedServices.length === 0
+                            ? null
+                            : selectedServices
+                        );
+                      }}
+                      values={stremThruProxiedServices || undefined}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          }
+        </div>
+
+        {showApiKeyInput && (
+          <div className={styles.section}>
+            <div className={styles.setting}>
+              <div className={styles.settingDescription}>
+                <h2 style={{ padding: '5px' }}>API Key</h2>
                 <p style={{ padding: '5px' }}>
-                  If the above buttons do not work, you can use the following
-                  manifest URL to install the addon.
+                  Enter your AIOStreams API Key to install and use this addon.
+                  You need to enter the one that is set in the{' '}
+                  <code>API_KEY</code> environment variable.
                 </p>
-                <input
-                  id="manualManifestUrl"
-                  type="text"
-                  value={manualManifestUrl}
-                  readOnly
-                  style={{ width: '100%', padding: '5px', margin: '5px' }}
+              </div>
+              <div className={styles.settingInput}>
+                <CredentialInput
+                  credential={apiKey}
+                  setCredential={setApiKey}
+                  inputProps={{
+                    placeholder: 'Enter your API key',
+                  }}
                 />
               </div>
-            </>
-          )}
+            </div>
+          </div>
+        )}
+
+        <div className={styles.installButtons}>
+          <button
+            className={styles.installButton}
+            disabled={disableButtons}
+            onClick={() => {
+              setDisableButtons(true);
+              const id = toast.loading('Generating manifest URL...', {
+                ...toastOptions,
+                toastId: 'generatingManifestUrl',
+              });
+              getManifestUrl()
+                .then((value) => {
+                  const { success, manifest, message } = value;
+                  if (!success || !manifest) {
+                    toast.update(id, {
+                      render: message || 'Failed to generate manifest URL',
+                      type: 'error',
+                      autoClose: 5000,
+                      isLoading: false,
+                    });
+                    setDisableButtons(false);
+                    return;
+                  }
+                  toast.update(id, {
+                    render: 'Manifest URL generated',
+                    type: 'success',
+                    autoClose: 5000,
+                    isLoading: false,
+                  });
+                  setManifestUrl(manifest);
+                  setDisableButtons(false);
+                })
+                .catch((error: any) => {
+                  console.error(error);
+                  toast.update(id, {
+                    render:
+                      'An unexpected error occurred while generating the manifest URL',
+                    type: 'error',
+                    autoClose: 5000,
+                    isLoading: false,
+                  });
+                  setDisableButtons(false);
+                });
+            }}
+          >
+            Generate Manifest URL
+          </button>
+          <InstallWindow
+            manifestUrl={manifestUrl}
+            setManifestUrl={setManifestUrl}
+          />
         </div>
       </div>
       <ToastContainer

@@ -6,8 +6,10 @@ import {
 } from '@aiostreams/types';
 import { ParsedStream, Stream, Config } from '@aiostreams/types';
 import { BaseWrapper } from './base';
-import { addonDetails } from '@aiostreams/utils';
+import { addonDetails, createLogger } from '@aiostreams/utils';
 import { Settings } from '@aiostreams/utils';
+
+const logger = createLogger('wrappers');
 
 // name, title, url
 export class OrionStremioAddon extends BaseWrapper {
@@ -29,7 +31,10 @@ export class OrionStremioAddon extends BaseWrapper {
       url,
       addonId,
       userConfig,
-      indexerTimeout || Settings.DEFAULT_ORION_TIMEOUT
+      indexerTimeout || Settings.DEFAULT_ORION_TIMEOUT,
+      Settings.DEFAULT_ORION_USER_AGENT
+        ? { 'User-Agent': Settings.DEFAULT_ORION_USER_AGENT }
+        : undefined
     );
   }
 
@@ -142,9 +147,7 @@ export async function getOrionStreams(
 
   // otherwise, pass all the services to orion
   const debridServices = usableServices.map((service) => service.id);
-  console.log(
-    `|DBG| wrappers > orion > using debrid services: ${debridServices}`
-  );
+  logger.info(`Using Orion with debrid services: ${debridServices}`);
   const configString = getOrionConfigString(
     orionApiKey,
     orionOptions.linkLimit,

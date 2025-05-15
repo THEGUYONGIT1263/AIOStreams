@@ -1,7 +1,9 @@
 import { AddonDetail, ParseResult, StreamRequest } from '@aiostreams/types';
 import { ParsedStream, Stream, Config } from '@aiostreams/types';
 import { BaseWrapper } from './base';
-import { addonDetails, Settings } from '@aiostreams/utils';
+import { addonDetails, Settings, createLogger } from '@aiostreams/utils';
+
+const logger = createLogger('wrappers');
 
 export class MediaFusion extends BaseWrapper {
   constructor(
@@ -12,16 +14,21 @@ export class MediaFusion extends BaseWrapper {
     userConfig: Config,
     indexerTimeout?: number
   ) {
-    let url = overrideUrl
-      ? overrideUrl
-      : Settings.MEDIAFUSION_URL + (configString ? configString + '/' : '');
+    let url = overrideUrl ? overrideUrl : Settings.MEDIAFUSION_URL;
 
     super(
       addonName,
       url,
       addonId,
       userConfig,
-      indexerTimeout || Settings.DEFAULT_MEDIAFUSION_TIMEOUT
+      indexerTimeout || Settings.DEFAULT_MEDIAFUSION_TIMEOUT,
+      {
+        encoded_user_data: configString && !overrideUrl ? configString : '',
+        // only set the user agent if it is defined in the settings, otherwise user agent would be empty in base class
+        ...(Settings.DEFAULT_MEDIAFUSION_USER_AGENT
+          ? { 'User-Agent': Settings.DEFAULT_MEDIAFUSION_USER_AGENT }
+          : {}),
+      }
     );
   }
 
@@ -32,7 +39,21 @@ export class MediaFusion extends BaseWrapper {
         result: stream.description,
       };
     }
-    return super.parseStream(stream);
+    const parseResult = super.parseStream(stream);
+    if (parseResult.type === 'stream' && parseResult.result) {
+      const torrentNameRegex = /📂\s*(.+)/;
+      const description = stream.description || stream.title;
+      const match = torrentNameRegex.exec(description || '');
+      if (match && match[1].trim() !== parseResult.result.filename?.trim()) {
+        parseResult.result.folderName = match[1].trim();
+        if (parseResult.result.folderName.split('┈➤')[1]) {
+          parseResult.result.filename = parseResult.result.folderName
+            .split('┈➤')[1]
+            .trim();
+        }
+      }
+    }
+    return parseResult;
   }
 }
 
@@ -45,6 +66,7 @@ export async function getMediafusionStreams(
     overrideName?: string;
     filterCertificationLevels?: string;
     filterNudity?: string;
+    liveSearchStreams?: string;
   },
   streamRequest: StreamRequest,
   addonId: string
@@ -59,6 +81,8 @@ export async function getMediafusionStreams(
   const indexerTimeout = mediafusionOptions.indexerTimeout
     ? parseInt(mediafusionOptions.indexerTimeout)
     : undefined;
+  const liveSearchStreams =
+    mediafusionOptions.liveSearchStreams === 'true' ? true : false;
 
   // If overrideUrl is provided, use it to get streams and skip all other steps
   if (mediafusionOptions.overrideUrl) {
@@ -80,12 +104,12 @@ export async function getMediafusionStreams(
 
   // if no usable services found, use mediafusion without debrid
   if (usableServices.length < 1) {
-    const configString = await getConfigString(
-      getMediaFusionConfig(
-        mediafusionOptions.filterCertificationLevels,
-        mediafusionOptions.filterNudity
-      )
+    const configString = getConfigString(
+      mediafusionOptions.filterCertificationLevels,
+      mediafusionOptions.filterNudity,
+      liveSearchStreams
     );
+
     const mediafusion = new MediaFusion(
       configString,
       null,
@@ -124,15 +148,15 @@ export async function getMediafusionStreams(
     }
 
     // get the encrypted mediafusion string
-    const mediafusionConfig = getMediaFusionConfig(
+    const mediafusionConfig = getConfigString(
       mediafusionOptions.filterCertificationLevels,
       mediafusionOptions.filterNudity,
+      liveSearchStreams,
       debridService.id,
       debridService.credentials
     );
-    const encryptedStr = await getConfigString(mediafusionConfig);
     const mediafusion = new MediaFusion(
-      encryptedStr,
+      mediafusionConfig,
       null,
       mediafusionOptions.overrideName,
       addonId,
@@ -150,15 +174,18 @@ export async function getMediafusionStreams(
     throw new Error(`No enabled services found for MediaFusion`);
   }
   const promises = servicesToUse.map(async (service) => {
-    const mediafusionConfig = getMediaFusionConfig(
+    logger.info(`Getting MediaFusion streams for ${service.id}`, {
+      func: 'mediafusion',
+    });
+    const encodedConfigString = getConfigString(
       mediafusionOptions.filterCertificationLevels,
       mediafusionOptions.filterNudity,
+      liveSearchStreams,
       service.id,
       service.credentials
     );
-    const encryptedStr = await getConfigString(mediafusionConfig);
     const mediafusion = new MediaFusion(
-      encryptedStr,
+      encodedConfigString,
       null,
       mediafusionOptions.overrideName,
       addonId,
@@ -184,9 +211,10 @@ export async function getMediafusionStreams(
   };
 }
 
-const getMediaFusionConfig = (
+const getConfigString = (
   filterCertificationLevels?: string,
   filterNudity?: string,
+  liveSearchStreams: boolean = false,
   service?: string,
   credentials: { [key: string]: string } = {}
 ): any => {
@@ -200,114 +228,100 @@ const getMediaFusionConfig = (
     const levels = filterNudity.split(',');
     nudityFilter = levels.map((level) => level.trim());
   }
-  console.debug(
-    `|DBG| wrappers > mediafusion: Determined nudity filter: ${nudityFilter} and certification filter: ${certificationFilter}`
-  );
-  return {
-    streaming_provider: service
-      ? {
-          token: !['pikpak'].includes(service) ? credentials.apiKey : undefined,
-          email: credentials.email,
-          password: credentials.password,
-          service: service,
-          enable_watchlists_catalogs: false,
-          download_via_browser: false,
-          only_show_cached_streams: false,
-        }
-      : null,
-    selected_catalogs: [],
-    selected_resolutions: [
-      '4k',
-      '2160p',
-      '1440p',
-      '1080p',
-      '720p',
-      '576p',
-      '480p',
-      '360p',
-      '240p',
-      null,
-    ],
-    enable_catalogs: true,
-    enable_imdb_metadata: false,
-    max_size: 'inf',
-    max_streams_per_resolution: '500',
-    torrent_sorting_priority: [
-      { key: 'language', direction: 'desc' },
-      { key: 'cached', direction: 'desc' },
-      { key: 'resolution', direction: 'desc' },
-      { key: 'quality', direction: 'desc' },
-      { key: 'size', direction: 'desc' },
-      { key: 'seeders', direction: 'desc' },
-      { key: 'created_at', direction: 'desc' },
-    ],
-    show_full_torrent_name: true,
-    show_language_country_flag: true,
-    nudity_filter: nudityFilter,
-    certification_filter: certificationFilter,
-    language_sorting: [
-      'English',
-      'Tamil',
-      'Hindi',
-      'Malayalam',
-      'Kannada',
-      'Telugu',
-      'Chinese',
-      'Russian',
-      'Arabic',
-      'Japanese',
-      'Korean',
-      'Taiwanese',
-      'Latino',
-      'French',
-      'Spanish',
-      'Portuguese',
-      'Italian',
-      'German',
-      'Ukrainian',
-      'Polish',
-      'Czech',
-      'Thai',
-      'Indonesian',
-      'Vietnamese',
-      'Dutch',
-      'Bengali',
-      'Turkish',
-      'Greek',
-      'Swedish',
-      null,
-    ],
-    quality_filter: [
-      'BluRay/UHD',
-      'WEB/HD',
-      'DVD/TV/SAT',
-      'CAM/Screener',
-      'Unknown',
-    ],
-    api_password: Settings.MEDIAFUSION_API_PASSWORD || null,
-    mediaflow_config: null,
-    rpdb_config: null,
-    live_search_streams: false,
-    contribution_streams: false,
-    mdblist_config: null,
-  };
+  return Buffer.from(
+    JSON.stringify({
+      streaming_provider: service
+        ? {
+            token: !['pikpak'].includes(service)
+              ? credentials.apiKey
+              : undefined,
+            email: credentials.email,
+            password: credentials.password,
+            service: service,
+            enable_watchlists_catalogs: false,
+            download_via_browser: false,
+            only_show_cached_streams: false,
+          }
+        : null,
+      selected_catalogs: [],
+      selected_resolutions: [
+        '4k',
+        '2160p',
+        '1440p',
+        '1080p',
+        '720p',
+        '576p',
+        '480p',
+        '360p',
+        '240p',
+        null,
+      ],
+      enable_catalogs: true,
+      enable_imdb_metadata: false,
+      max_size: 'inf',
+      max_streams_per_resolution: '500',
+      torrent_sorting_priority: [
+        { key: 'language', direction: 'desc' },
+        { key: 'cached', direction: 'desc' },
+        { key: 'resolution', direction: 'desc' },
+        { key: 'quality', direction: 'desc' },
+        { key: 'size', direction: 'desc' },
+        { key: 'seeders', direction: 'desc' },
+        { key: 'created_at', direction: 'desc' },
+      ],
+      show_full_torrent_name: true,
+      show_language_country_flag: true,
+      nudity_filter: nudityFilter,
+      certification_filter: certificationFilter,
+      language_sorting: [
+        'English',
+        'Tamil',
+        'Hindi',
+        'Malayalam',
+        'Kannada',
+        'Telugu',
+        'Chinese',
+        'Russian',
+        'Arabic',
+        'Japanese',
+        'Korean',
+        'Taiwanese',
+        'Latino',
+        'French',
+        'Spanish',
+        'Portuguese',
+        'Italian',
+        'German',
+        'Ukrainian',
+        'Polish',
+        'Czech',
+        'Thai',
+        'Indonesian',
+        'Vietnamese',
+        'Dutch',
+        'Bengali',
+        'Turkish',
+        'Greek',
+        'Swedish',
+        null,
+      ],
+      quality_filter: [
+        'BluRay/UHD',
+        'WEB/HD',
+        'DVD/TV/SAT',
+        'CAM/Screener',
+        'Unknown',
+      ],
+      api_password: Settings.MEDIAFUSION_API_PASSWORD || null,
+      mediaflow_config: null,
+      rpdb_config: null,
+      live_search_streams: liveSearchStreams,
+      contribution_streams: false,
+      mdblist_config: null,
+    })
+  )
+    .toString('base64')
+    .replace(/\+/g, '-') // Convert '+' to '-'
+    .replace(/\//g, '_') // Convert '/' to '_'
+    .replace(/=+$/, '');
 };
-
-async function getConfigString(data: any): Promise<string> {
-  const encryptUrl = `${Settings.MEDIAFUSION_URL}encrypt-user-data`;
-  const response = await fetch(encryptUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(data),
-  });
-
-  const encryptedData = await response.json();
-  if (encryptedData.status !== 'success') {
-    throw new Error(
-      `Config encryption failed: ${encryptedData.message || 'Unknown error'}`
-    );
-  }
-  return encryptedData.encrypted_str;
-}

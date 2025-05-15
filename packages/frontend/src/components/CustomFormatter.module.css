@@ -1,0 +1,96 @@
+.customFormatterContainer {
+  background-color: #121212;
+  border-radius: var(--borderRadius);
+  border: 1px solid #333;
+  margin-top: 15px;
+  padding: 0;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.customFormatterTitle {
+  padding: 12px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #aaa;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: background-color 0.2s ease;
+}
+
+.customFormatterTitle:hover {
+  background-color: #1a1a1a;
+  color: #fff;
+}
+
+.expandIcon {
+  font-size: 12px;
+  transition: transform 0.2s ease;
+}
+
+.customFormatterContent {
+  padding: 15px;
+  border-top: 1px solid #333;
+  background-color: #121212;
+}
+
+.customFormatterDescription {
+  font-size: 14px;
+  color: #aaa;
+  margin-bottom: 15px;
+  line-height: 1.5;
+}
+
+.customFormatterDescription code {
+  background-color: #1e1e1e;
+  padding: 2px 4px;
+  border-radius: 3px;
+  margin: 0 2px;
+  font-family: monospace;
+  color: #e0e0e0;
+}
+
+.formGroup {
+  margin-bottom: 12px;
+}
+
+.label {
+  display: block;
+  font-size: 14px;
+  color: #aaa;
+  margin-bottom: 5px;
+}
+
+.syntaxInput {
+  width: 100%;
+  background-color: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: var(--borderRadius);
+  color: white;
+  padding: 10px;
+  font-family: monospace;
+  resize: vertical;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
+}
+
+.syntaxInput:focus {
+  border-color: #555;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.1);
+  outline: none;
+}
+
+.syntaxInput:hover {
+  background-color: #252525;
+  border-color: #444;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.2);
+}
+
+.syntaxInput::placeholder {
+  color: #666;
+}

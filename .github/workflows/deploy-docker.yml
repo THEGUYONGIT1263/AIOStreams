@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*' # Trigger on any tag that starts with 'v'
+    branches:
+      - main # Trigger on push to main branch
 
 jobs:
   docker:
@@ -31,13 +33,15 @@ jobs:
 
       # Log in to Docker Hub
       - name: Log in to Docker Hub
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Build and push Docker image to both GHCR and Docker Hub
-      - name: Build and push Docker image
+      - name: Build and push Docker image (tags)
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/build-push-action@v6
         with:
           platforms: linux/amd64,linux/arm64
@@ -47,3 +51,12 @@ jobs:
             ghcr.io/viren070/aiostreams:latest
             docker.io/${{ secrets.DOCKERHUB_USERNAME }}/aiostreams:${{ github.ref_name }}
             docker.io/${{ secrets.DOCKERHUB_USERNAME }}/aiostreams:latest
+
+      # Build and push Docker image to GHCR only for each commit to main branch
+      - name: Build and push Docker image (dev)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/viren070/aiostreams:dev

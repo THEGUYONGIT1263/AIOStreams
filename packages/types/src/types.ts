@@ -3,18 +3,26 @@ export interface ParsedNameData {
   resolution: string;
   quality: string;
   encode: string;
+  releaseGroup: string;
   visualTags: string[];
   audioTags: string[];
   languages: string[];
+  title?: string;
+  year?: string;
+  season?: number;
+  seasons?: number[];
+  episode?: number;
 }
 
 // the parsed stream data which is to be used to create the final stream object
 export interface ParsedStream extends ParsedNameData {
+  proxied: boolean; // if the stream is proxied or not
   addon: {
     id: string;
     name: string;
   };
   filename?: string;
+  folderName?: string;
   message?: string;
   size?: number;
   provider?: {
@@ -36,7 +44,13 @@ export interface ParsedStream extends ParsedNameData {
   url?: string;
   externalUrl?: string;
   indexers?: string;
+  releaseGroup: string;
   personal?: boolean;
+  regexMatched?: {
+    pattern: string;
+    name?: string;
+    index: number;
+  };
   stream?: {
     subtitles?: Subtitle[];
     behaviorHints?: {
@@ -118,8 +132,14 @@ export type Encode = { [key: string]: boolean };
 export type SortBy = { [key: string]: boolean | string | undefined };
 export type StreamType = { [key: string]: boolean };
 
+export interface CustomFormatter {
+  name?: string;
+  description?: string;
+}
+
 export interface Config {
-  instanceCache?: any;
+  apiKey?: string;
+  overrideName?: string;
   requestingIp?: string;
   resolutions: Resolution[];
   qualities: Quality[];
@@ -133,53 +153,32 @@ export interface Config {
   prioritisedLanguages: string[] | null;
   excludedLanguages: string[] | null;
   formatter: string;
-  customFormatter?: {
-    splitter: string; // e.g. ' - ', ' | ' etc. the string used to split the tags
-    // we need to have a key for where the value has to be determined from the stream data.
-    // examples of this is provider and seedersOrAge. provider.cached has different states and seedersOrAge has different states
-
-    // available values:
-    // {resolution}, {quality}, {streamType} {encode}, {visualTags}, {audioTags}, {languages}, {provider}, {seedersOrAge}, {filename}, {size}, {addonName}, {seedersOrAge}
-    languages: {
-      useEmojis: boolean; // e.g. 🇬🇧
-    };
-    hideIfUnknown: boolean; // if true, the tag will not be shown if the value is unknown
-    provider: {
-      trueCacheStatus: string; // e.g. ⚡️
-      falseCacheStatus: string; // e.g. ⏳
-      undefinedCacheStatus: string; // e.g. ❓
-      finalString: string; // e.g. [{providerShortName}{cacheStatus}]  ->  [TB⚡️] or this could be left empty
-    };
-    streamType: {
-      torrent: string; // e.g. 🧲
-      usenet: string; // e.g. 📡
-      direct: string; // e.g. 📥
-      unknown: string; // e.g. ❓
-      finalString: string; // e.g. {streamType}  ->  🧲
-    };
-    seedersOrAge: {
-      whenSeeders: string; // e.g. 👤
-      whenAge: string; // e.g. 📅
-      finalString: string; // e.g. {seedersOrAge} {seedersOrAgeValue}
-    };
-    name: string;
-    description: string;
-  };
   maxSize?: number | null;
   minSize?: number | null;
   maxMovieSize: number | null;
   minMovieSize: number | null;
   maxEpisodeSize: number | null;
   minEpisodeSize: number | null;
-  addonNameInDescription?: boolean;
   cleanResults: boolean;
   maxResultsPerResolution: number | null;
   excludeFilters: string[] | null;
   strictIncludeFilters: string[] | null;
+  regexFilters?: {
+    excludePattern?: string;
+    includePattern?: string;
+  };
   mediaFlowConfig?: {
     mediaFlowEnabled: boolean;
     proxyUrl: string;
     apiPassword: string;
+    publicIp: string;
+    proxiedAddons: string[] | null;
+    proxiedServices: string[] | null;
+  };
+  stremThruConfig?: {
+    stremThruEnabled: boolean;
+    url: string;
+    credential: string;
     publicIp: string;
     proxiedAddons: string[] | null;
     proxiedServices: string[] | null;
@@ -194,6 +193,8 @@ export interface Config {
     enabled: boolean;
     credentials: { [key: string]: string };
   }[];
+  /** Space-separated regex patterns to sort streams by. Streams will be sorted based on the order of matching patterns. */
+  regexSortPatterns?: string;
 }
 
 interface BaseOptionDetail {

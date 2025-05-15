@@ -1,5 +1,12 @@
 import { AddonDetail, Config } from '@aiostreams/types';
-import { addonDetails, serviceDetails, Settings } from '@aiostreams/utils';
+import {
+  addonDetails,
+  isValueEncrypted,
+  parseAndDecryptString,
+  serviceDetails,
+  Settings,
+  unminifyConfig,
+} from '@aiostreams/utils';
 
 export const allowedFormatters = [
   'gdrive',
@@ -7,6 +14,7 @@ export const allowedFormatters = [
   'torrentio',
   'torbox',
   'imposter',
+  'custom',
 ];
 
 export const allowedLanguages = [
@@ -63,11 +71,15 @@ export const allowedLanguages = [
   'Dubbed',
 ];
 
-export function validateConfig(config: Config): {
+export function validateConfig(
+  config: Config,
+  environment: 'client' | 'server' = 'server'
+): {
   valid: boolean;
   errorCode: string | null;
   errorMessage: string | null;
 } {
+  config = unminifyConfig(config);
   const createResponse = (
     valid: boolean,
     errorCode: string | null,
@@ -91,8 +103,42 @@ export function validateConfig(config: Config): {
       `You can only select a maximum of ${Settings.MAX_ADDONS} addons`
     );
   }
-
-  // check for any duplicate addons where both the ID and options are the same
+  // check for apiKey if Settings.API_KEY is set
+  if (environment === 'server' && Settings.API_KEY) {
+    const { apiKey } = config;
+    if (!apiKey) {
+      return createResponse(
+        false,
+        'missingApiKey',
+        'The AIOStreams API key is required'
+      );
+    }
+    let decryptedApiKey = apiKey;
+    if (isValueEncrypted(apiKey)) {
+      const decryptionResult = parseAndDecryptString(apiKey);
+      if (decryptionResult === null) {
+        return createResponse(
+          false,
+          'decryptionFailed',
+          'Failed to decrypt the AIOStreams API key'
+        );
+      } else if (decryptionResult === '') {
+        return createResponse(
+          false,
+          'emptyDecryption',
+          'Decrypted API key is empty'
+        );
+      }
+      decryptedApiKey = decryptionResult;
+    }
+    if (decryptedApiKey !== Settings.API_KEY) {
+      return createResponse(
+        false,
+        'invalidApiKey',
+        'Invalid AIOStreams API key. Please use the one defined in your environment variables'
+      );
+    }
+  }
   const duplicateAddons = config.addons.filter(
     (addon, index) =>
       config.addons.findIndex(
@@ -161,11 +207,28 @@ export function validateConfig(config: Config): {
 
         if (
           option.id.toLowerCase().includes('url') &&
-          addon.options[option.id]
+          addon.options[option.id] &&
+          ((isValueEncrypted(addon.options[option.id]) &&
+            environment === 'server') ||
+            !isValueEncrypted(addon.options[option.id]))
         ) {
+          const url = parseAndDecryptString(addon.options[option.id] ?? '');
+          if (url === null) {
+            return createResponse(
+              false,
+              'decryptionFailed',
+              `Failed to decrypt URL for ${option.label}`
+            );
+          } else if (url === '') {
+            return createResponse(
+              false,
+              'emptyDecryption',
+              `Decrypted URL for ${option.label} is empty`
+            );
+          }
           if (
             Settings.DISABLE_TORRENTIO &&
-            addon.options[option.id]?.match(/torrentio\.strem\.fun/) !== null
+            url.match(/torrentio\.strem\.fun/) !== null
           ) {
             // if torrentio is disabled, don't allow the user to set URLs with torrentio.strem.fun
             return createResponse(
@@ -175,14 +238,13 @@ export function validateConfig(config: Config): {
             );
           } else if (
             Settings.DISABLE_TORRENTIO &&
-            addon.options[option.id]?.match(/stremthru\.elfhosted\.com/) !==
-              null
+            url.match(/stremthru\.elfhosted\.com/) !== null
           ) {
             // if torrentio is disabled, we need to inspect the stremthru URL to see if it's using torrentio
             try {
-              const url = new URL(addon.options[option.id] as string);
+              const parsedUrl = new URL(url);
               // get the component before manifest.json
-              const pathComponents = url.pathname.split('/');
+              const pathComponents = parsedUrl.pathname.split('/');
               if (pathComponents.includes('manifest.json')) {
                 const index = pathComponents.indexOf('manifest.json');
                 const componentBeforeManifest = pathComponents[index - 1];
@@ -200,13 +262,9 @@ export function validateConfig(config: Config): {
             } catch (_) {
               // ignore
             }
-          } else if (
-            addon.options[option.id]?.match(
-              /^E-[0-9a-fA-F]{32}-[0-9a-fA-F]+$/
-            ) === null
-          ) {
+          } else {
             try {
-              new URL(addon.options[option.id] as string);
+              new URL(url);
             } catch (_) {
               return createResponse(
                 false,
@@ -245,12 +303,14 @@ export function validateConfig(config: Config): {
   }
 
   if (!allowedFormatters.includes(config.formatter)) {
-    if (config.formatter === 'custom') {
-      if (!config.customFormatter) {
+    if (config.formatter.startsWith('custom') && config.formatter.length > 7) {
+      const jsonString = config.formatter.slice(7);
+      const data = JSON.parse(jsonString);
+      if (!data.name || !data.description) {
         return createResponse(
           false,
-          'missingCustomFormatter',
-          'Custom formatter is required if custom formatter is selected'
+          'invalidCustomFormatter',
+          'Invalid custom formatter: name and description are required'
         );
       }
     } else {
@@ -323,6 +383,16 @@ export function validateConfig(config: Config): {
     );
   }
 
+  if (
+    config.mediaFlowConfig?.mediaFlowEnabled &&
+    config.stremThruConfig?.stremThruEnabled
+  ) {
+    return createResponse(
+      false,
+      'multipleProxyServices',
+      'Multiple proxy services are not allowed'
+    );
+  }
   if (config.mediaFlowConfig?.mediaFlowEnabled) {
     if (!config.mediaFlowConfig.proxyUrl) {
       return createResponse(
@@ -339,6 +409,24 @@ export function validateConfig(config: Config): {
       );
     }
   }
+
+  if (config.stremThruConfig?.stremThruEnabled) {
+    if (!config.stremThruConfig.url) {
+      return createResponse(
+        false,
+        'missingUrl',
+        'URL is required if Stremthru is enabled'
+      );
+    }
+    if (!config.stremThruConfig.credential) {
+      return createResponse(
+        false,
+        'missingCredential',
+        'Credential is required if StremThru is enabled'
+      );
+    }
+  }
+
   if (
     (config.excludeFilters?.length ?? 0) > Settings.MAX_KEYWORD_FILTERS ||
     (config.strictIncludeFilters?.length ?? 0) > Settings.MAX_KEYWORD_FILTERS
@@ -371,5 +459,79 @@ export function validateConfig(config: Config): {
     }
   });
 
+  if (config.regexFilters) {
+    if (!config.apiKey) {
+      return createResponse(
+        false,
+        'missingApiKey',
+        'Regex filtering requires an API key to be set'
+      );
+    }
+
+    if (config.regexFilters.excludePattern) {
+      try {
+        new RegExp(config.regexFilters.excludePattern);
+      } catch (e) {
+        return createResponse(
+          false,
+          'invalidExcludeRegex',
+          'Invalid exclude regex pattern'
+        );
+      }
+    }
+
+    if (config.regexFilters.includePattern) {
+      try {
+        new RegExp(config.regexFilters.includePattern);
+      } catch (e) {
+        return createResponse(
+          false,
+          'invalidIncludeRegex',
+          'Invalid include regex pattern'
+        );
+      }
+    }
+  }
+
+  if (config.regexSortPatterns) {
+    if (!config.apiKey) {
+      return createResponse(
+        false,
+        'missingApiKey',
+        'Regex sorting requires an API key to be set'
+      );
+    }
+
+    // Split the pattern by spaces and validate each one
+    const patterns = config.regexSortPatterns.split(/\s+/).filter(Boolean);
+    // Enforce an upper bound on the number of patterns
+    if (patterns.length > Settings.MAX_REGEX_SORT_PATTERNS) {
+      return createResponse(
+        false,
+        'tooManyRegexSortPatterns',
+        `You can specify at most ${Settings.MAX_REGEX_SORT_PATTERNS} regex sort patterns`
+      );
+    }
+
+    for (const pattern of patterns) {
+      const delimiter = '<::>';
+      const delimiterIndex = pattern.indexOf(delimiter);
+      let name: string = 'Unamed';
+      let regexPattern = pattern;
+      if (delimiterIndex !== -1) {
+        name = pattern.slice(0, delimiterIndex).replace(/_/g, ' ');
+        regexPattern = pattern.slice(delimiterIndex + delimiter.length);
+      }
+      try {
+        new RegExp(regexPattern);
+      } catch (e) {
+        return createResponse(
+          false,
+          'invalidRegexSortPattern',
+          `Invalid regex sort pattern: ${name ? `"${name}" ` : ''}${regexPattern}`
+        );
+      }
+    }
+  }
   return createResponse(true, null, null);
 }

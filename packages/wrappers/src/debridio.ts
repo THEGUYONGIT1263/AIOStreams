@@ -1,8 +1,10 @@
 import { AddonDetail, ParseResult, StreamRequest } from '@aiostreams/types';
 import { ParsedStream, Stream, Config } from '@aiostreams/types';
 import { BaseWrapper } from './base';
-import { addonDetails } from '@aiostreams/utils';
+import { addonDetails, createLogger } from '@aiostreams/utils';
 import { Settings } from '@aiostreams/utils';
+
+const logger = createLogger('wrappers');
 
 export class Debridio extends BaseWrapper {
   constructor(
@@ -22,7 +24,10 @@ export class Debridio extends BaseWrapper {
       url,
       addonId,
       userConfig,
-      indexerTimeout || Settings.DEFAULT_DEBRIDIO_TIMEOUT
+      indexerTimeout || Settings.DEFAULT_DEBRIDIO_TIMEOUT,
+      Settings.DEFAULT_DEBRIDIO_USER_AGENT
+        ? { 'User-Agent': Settings.DEFAULT_DEBRIDIO_USER_AGENT }
+        : undefined
     );
   }
 }
@@ -136,6 +141,9 @@ export async function getDebridioStreams(
   const addonErrors: string[] = [];
 
   const streamPromises = servicesToUse.map(async (service) => {
+    logger.info(`Getting Debridio streams for ${service.name}`, {
+      func: 'debridio',
+    });
     const debridioConfigString = getDebridioConfigString(
       service.id,
       service.credentials.apiKey

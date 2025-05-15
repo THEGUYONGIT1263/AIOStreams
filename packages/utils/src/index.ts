@@ -4,3 +4,6 @@ export * from './settings';
 export * from './mediaflow';
 export * from './cache';
 export * from './general';
+export * from './logger';
+export * from './stremthru';
+export * from './regex';

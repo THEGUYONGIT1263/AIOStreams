@@ -1,8 +1,15 @@
-import { AddonDetail, StreamRequest } from '@aiostreams/types';
+import {
+  AddonDetail,
+  ParseResult,
+  Stream,
+  StreamRequest,
+} from '@aiostreams/types';
 import { ParsedStream, Config } from '@aiostreams/types';
 import { BaseWrapper } from './base';
-import { addonDetails } from '@aiostreams/utils';
+import { addonDetails, createLogger } from '@aiostreams/utils';
 import { Settings } from '@aiostreams/utils';
+
+const logger = createLogger('wrappers');
 
 export class Torrentio extends BaseWrapper {
   constructor(
@@ -22,8 +29,23 @@ export class Torrentio extends BaseWrapper {
       url,
       addonId,
       userConfig,
-      indexerTimeout || Settings.DEFAULT_TORRENTIO_TIMEOUT
+      indexerTimeout || Settings.DEFAULT_TORRENTIO_TIMEOUT,
+      Settings.DEFAULT_TORRENTIO_USER_AGENT
+        ? { 'User-Agent': Settings.DEFAULT_TORRENTIO_USER_AGENT }
+        : undefined
     );
+  }
+
+  protected parseStream(stream: Stream): ParseResult {
+    const parseResult = super.parseStream(stream);
+    if (parseResult.type === 'stream' && parseResult.result) {
+      const description = stream.description || stream.title;
+      const folderName = description?.split('\n')?.[0];
+      if (folderName !== parseResult.result.filename) {
+        parseResult.result.folderName = folderName;
+      }
+    }
+    return parseResult;
   }
 }
 
@@ -50,7 +72,7 @@ export async function getTorrentioStreams(
   if (torrentioOptions.overrideUrl) {
     const torrentio = new Torrentio(
       null,
-      torrentioOptions.overrideUrl as string,
+      torrentioOptions.overrideUrl,
       torrentioOptions.overrideName,
       addonId,
       config,
@@ -90,7 +112,9 @@ export async function getTorrentioStreams(
 
   if (torrentioOptions.useMultipleInstances === 'true') {
     const promises = usableServices.map(async (service) => {
-      console.log('Creating Torrentio instance with service:', service.id);
+      logger.info(`Getting Torrentio streams for ${service.name}`, {
+        func: 'torrentio',
+      });
       let configString = getServicePair(service.id, service.credentials);
       const torrentio = new Torrentio(
         configString,

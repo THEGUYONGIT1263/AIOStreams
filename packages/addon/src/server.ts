@@ -9,20 +9,33 @@ import { errorResponse } from './responses';
 import {
   Settings,
   addonDetails,
-  compressAndEncrypt,
   parseAndDecryptString,
   Cache,
+  unminifyConfig,
+  minifyConfig,
+  crushJson,
+  compressData,
+  encryptData,
+  decompressData,
+  decryptData,
+  uncrushJson,
+  loadSecretKey,
+  createLogger,
+  getTimeTakenSincePoint,
+  isValueEncrypted,
+  maskSensitiveInfo,
 } from '@aiostreams/utils';
 
+const logger = createLogger('server');
+
 const app = express();
-console.log(`|INF| server > init: Starting server and loading settings...`);
+//logger.info(`Starting server and loading settings...`);
+logger.info('Starting server and loading settings...', { func: 'init' });
 Object.entries(Settings).forEach(([key, value]) => {
   switch (key) {
     case 'SECRET_KEY':
       if (value) {
-        console.log(
-          `|INF| server > init: ${key} = ${value.replace(/./g, '*').slice(0, 32)}`
-        );
+        logger.info(`${key} = ${value.replace(/./g, '*').slice(0, 64)}`);
       }
       break;
 
@@ -32,31 +45,23 @@ Object.entries(Settings).forEach(([key, value]) => {
       break;
 
     default:
-      console.log(`|INF| server > init: ${key} = ${value}`);
+      logger.info(`${key} = ${value}`);
   }
 });
 
-if (!Settings.SECRET_KEY) {
-  console.warn(
-    '|WRN| server > init: SECRET_KEY is not set, data encryption is disabled!'
+// attempt to load the secret key
+try {
+  if (Settings.SECRET_KEY) loadSecretKey(true);
+} catch (error: any) {
+  // determine command to run based on system OS
+  const command =
+    process.platform === 'win32'
+      ? '[System.Guid]::NewGuid().ToString("N").Substring(0, 32) + [System.Guid]::NewGuid().ToString("N").Substring(0, 32)'
+      : 'openssl rand -hex 32';
+  logger.error(
+    `The secret key is invalid. You will not be able to generate configurations. You can generate a new secret key by running the following command\n${command}`
   );
 }
-
-let CUSTOM_CONFIGS: Record<string, string> = {};
-if (Settings.CUSTOM_CONFIGS) {
-  try {
-    CUSTOM_CONFIGS = JSON.parse(Settings.CUSTOM_CONFIGS);
-    console.log(
-      `|INF| server > init: Loaded ${Object.keys(CUSTOM_CONFIGS).length} custom configs under aliases ${Object.keys(CUSTOM_CONFIGS).join(', ')}`
-    );
-  } catch (error: any) {
-    console.error(
-      `|ERR| server > init: CUSTOM_CONFIGS is not valid JSON: ${error.message}`
-    );
-  }
-}
-
-const cache = new Cache(Settings.MAX_CACHE_SIZE);
 
 // Built-in middleware for parsing JSON
 app.use(express.json());
@@ -65,16 +70,24 @@ app.use(express.urlencoded({ extended: true }));
 
 // unhandled errors
 app.use((err: any, req: Request, res: Response, next: any) => {
-  console.error(`|ERR| server > ${err.message}`);
+  logger.error(`${err.message}`);
   res.status(500).send('Internal server error');
 });
 
 app.use((req, res, next) => {
   res.append('Access-Control-Allow-Origin', '*');
   res.append('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE');
-  console.log(
-    `|DBG| server > ${req.method} ${req.path.replace(/\/eyJ[\w\=]+/g, '/*******').replace(/\/E-[\w-]+/g, '/*******')}`
-  );
+  const start = Date.now();
+  res.on('finish', () => {
+    logger.info(
+      `${req.method} ${req.path
+        .replace(/\/ey[JI][\w\=]+/g, '/*******')
+        .replace(
+          /\/(E2?|B)?-[\w-\%]+/g,
+          '/*******'
+        )} - ${getIp(req) ? maskSensitiveInfo(getIp(req)!) : 'Unknown IP'} - ${res.statusCode} - ${getTimeTakenSincePoint(start)}`
+    );
+  });
   next();
 });
 
@@ -103,19 +116,31 @@ app.get('/configure', (req, res) => {
 
 app.get('/:config/configure', (req, res) => {
   const config = req.params.config;
-  if (config.startsWith('eyJ')) {
+  if (config.startsWith('eyJ') || config.startsWith('eyI')) {
     return res.sendFile(
       path.join(__dirname, '../../frontend/out/configure.html')
     );
   }
   try {
-    const configJson = encryptInfoInConfig(extractJsonConfig(config));
+    let configJson = extractJsonConfig(config);
+    let configString = config;
+    if (Settings.CUSTOM_CONFIGS) {
+      const customConfig = extractCustomConfig(config);
+      if (customConfig) {
+        configJson = customConfig;
+        configString = decodeURIComponent(Settings.CUSTOM_CONFIGS[config]);
+      }
+    }
+    if (isValueEncrypted(configString)) {
+      logger.info(`Encrypted config detected, encrypting credentials`);
+      configJson = encryptInfoInConfig(configJson);
+    }
     const base64Config = Buffer.from(JSON.stringify(configJson)).toString(
       'base64'
     );
-    res.redirect(`/${base64Config}/configure`);
+    res.redirect(`/${encodeURIComponent(base64Config)}/configure`);
   } catch (error: any) {
-    console.error(`|ERR| server > Failed to extract config: ${error.message}`);
+    logger.error(`Failed to extract config: ${error.message}`);
     res.status(400).send('Invalid config');
   }
 });
@@ -125,28 +150,26 @@ app.get('/manifest.json', (req, res) => {
 });
 
 app.get('/:config/manifest.json', (req, res) => {
-  const config = req.params.config;
+  const config = decodeURIComponent(req.params.config);
   let configJson: Config;
   try {
     configJson = extractJsonConfig(config);
-    console.log(`|DBG| server > Extracted config for manifest request`);
+    logger.info(`Extracted config for manifest request`);
     configJson = decryptEncryptedInfoFromConfig(configJson);
     if (Settings.LOG_SENSITIVE_INFO) {
-      console.log(`|DBG| server > Final config: ${JSON.stringify(configJson)}`);
+      logger.info(`Final config: ${JSON.stringify(configJson)}`);
     }
-    console.log(
-      `|DBG| server > Successfully removed or decrypted sensitive info`
-    );
+    logger.info(`Successfully removed or decrypted sensitive info`);
     const { valid, errorMessage } = validateConfig(configJson);
     if (!valid) {
-      console.error(
-        `|ERR| server > Received invalid config for manifest request: ${errorMessage}`
+      logger.error(
+        `Received invalid config for manifest request: ${errorMessage}`
       );
       res.status(400).json({ error: 'Invalid config', message: errorMessage });
       return;
     }
   } catch (error: any) {
-    console.error(`|ERR| server > Failed to extract config: ${error.message}`);
+    logger.error(`Failed to extract config: ${error.message}`);
     res.status(400).json({ error: 'Invalid config' });
     return;
   }
@@ -171,16 +194,14 @@ app.get('/:config/stream/:type/:id.json', (req, res: Response): void => {
   let configJson: Config;
   try {
     configJson = extractJsonConfig(config);
-    console.log(`|DBG| server > Extracted config for stream request`);
+    logger.info(`Extracted config for stream request`);
     configJson = decryptEncryptedInfoFromConfig(configJson);
     if (Settings.LOG_SENSITIVE_INFO) {
-      console.log(`|DBG| server > Final config: ${JSON.stringify(configJson)}`);
+      logger.info(`Final config: ${JSON.stringify(configJson)}`);
     }
-    console.log(
-      `|DBG| server > Successfully removed or decrypted sensitive info`
-    );
+    logger.info(`Successfully removed or decrypted sensitive info`);
   } catch (error: any) {
-    console.error(`|ERR| server > Failed to extract config: ${error.message}`);
+    logger.error(`Failed to extract config: ${error.message}`);
     res.json(
       errorResponse(
         `${error.message}, please check the logs or click this stream to create an issue on GitHub`,
@@ -192,10 +213,10 @@ app.get('/:config/stream/:type/:id.json', (req, res: Response): void => {
     return;
   }
 
-  console.log(`|DBG| server > Requesting streams for ${type} ${id}`);
+  logger.info(`Requesting streams for ${type} ${id}`);
 
   if (type !== 'movie' && type !== 'series') {
-    console.error(`|ERR| server > Invalid type for stream request`);
+    logger.error(`Invalid type for stream request`);
     res.json(
       errorResponse(
         'Invalid type for stream request, must be movie or series',
@@ -210,20 +231,13 @@ app.get('/:config/stream/:type/:id.json', (req, res: Response): void => {
   try {
     const { valid, errorCode, errorMessage } = validateConfig(configJson);
     if (!valid) {
-      console.error(
-        `|ERR| server > Received invalid config: ${errorCode} - ${errorMessage}`
-      );
+      logger.error(`Received invalid config: ${errorCode} - ${errorMessage}`);
       res.json(
         errorResponse(errorMessage ?? 'Unknown', rootUrl(req), '/configure')
       );
       return;
     }
-    configJson.requestingIp =
-      req.get('X-Forwarded-For') ||
-      req.get('X-Real-IP') ||
-      req.get('CF-Connecting-IP') ||
-      req.ip;
-    configJson.instanceCache = cache;
+    configJson.requestingIp = getIp(req);
     const aioStreams = new AIOStreams(configJson);
     aioStreams
       .getStreams(streamRequest)
@@ -231,7 +245,7 @@ app.get('/:config/stream/:type/:id.json', (req, res: Response): void => {
         res.json({ streams: streams });
       })
       .catch((error: any) => {
-        console.error(`|ERR| server > Internal addon error: ${error.message}`);
+        logger.error(`Internal addon error: ${error.message}`);
         res.json(
           errorResponse(
             'An unexpected error occurred, please check the logs or create an issue on GitHub',
@@ -242,7 +256,7 @@ app.get('/:config/stream/:type/:id.json', (req, res: Response): void => {
         );
       });
   } catch (error: any) {
-    console.error(`|ERR| server > Internal addon error: ${error.message}`);
+    logger.error(`Internal addon error: ${error.message}`);
     res.json(
       errorResponse(
         'An unexpected error occurred, please check the logs or create an issue on GitHub',
@@ -256,36 +270,75 @@ app.get('/:config/stream/:type/:id.json', (req, res: Response): void => {
 
 app.post('/encrypt-user-data', (req, res) => {
   const { data } = req.body;
-
+  let finalString: string = '';
   if (!data) {
-    console.error('|ERR| server > /encrypt-user-data: No data provided');
-    res.status(400).json({ success: false, message: 'No data provided' });
+    logger.error('/encrypt-user-data: No data provided');
+    res.json({ success: false, message: 'No data provided' });
+    return;
+  }
+  // First, validate the config
+  try {
+    const config = JSON.parse(data);
+    const { valid, errorCode, errorMessage } = validateConfig(config);
+    if (!valid) {
+      logger.error(
+        `generateConfig: Invalid config: ${errorCode} - ${errorMessage}`
+      );
+      res.json({ success: false, message: errorMessage, error: errorMessage });
+      return;
+    }
+  } catch (error: any) {
+    logger.error(`/encrypt-user-data: Invalid JSON: ${error.message}`);
+    res.json({ success: false, message: 'Malformed configuration' });
     return;
   }
 
   try {
+    const minified = minifyConfig(JSON.parse(data));
+    const crushed = crushJson(JSON.stringify(minified));
+    const compressed = compressData(crushed);
     if (!Settings.SECRET_KEY) {
-      console.error('|ERR| server > /encrypt-user-data: Secret key not set');
-      res.status(500).json({ success: false, message: 'Secret key not set' });
-      return;
+      // use base64 encoding if no secret key is set
+      finalString = `B-${encodeURIComponent(compressed.toString('base64'))}`;
+    } else {
+      const { iv, data } = encryptData(compressed);
+      finalString = `E2-${encodeURIComponent(iv)}-${encodeURIComponent(data)}`;
     }
-    const { valid, errorCode, errorMessage } = validateConfig(JSON.parse(data));
-    if (!valid) {
-      console.error(
-        `|ERR| server > /encrypt-user-data: Invalid config: ${errorCode} - ${errorMessage}`
-      );
-      res
-        .status(200)
-        .json({ success: false, message: errorMessage, error: errorMessage });
-      return;
-    }
-    const encryptedData = compressAndEncrypt(data);
-    console.log(`|DBG| server > /encrypt-user-data: Encrypted data`);
-    res.status(200).json({ success: true, data: encryptedData });
+
+    logger.info(
+      `|INF| server > /encrypt-user-data: Encrypted user data, compression report:`
+    );
+    logger.info(`+--------------------------------------------+`);
+    logger.info(`| Original:         ${data.length} bytes`);
+    logger.info(`| URL Encoded:      ${encodeURIComponent(data).length} bytes`);
+    logger.info(`| Minified:         ${JSON.stringify(minified).length} bytes`);
+    logger.info(`| Crushed:          ${crushed.length} bytes`);
+    logger.info(`| Compressed:       ${compressed.length} bytes`);
+    logger.info(`| Final String:     ${finalString.length} bytes`);
+    logger.info(
+      `| Ratio:            ${((finalString.length / data.length) * 100).toFixed(2)}%`
+    );
+    logger.info(
+      `| Reduction:        ${data.length - finalString.length} bytes (${(((data.length - finalString.length) / data.length) * 100).toFixed(2)}%)`
+    );
+    logger.info(`+--------------------------------------------+`);
+
+    res.json({ success: true, data: finalString });
   } catch (error: any) {
-    console.error(`|ERR| server > /encrypt-user-data: ${error.message}`);
-    res.status(500).json({ success: false, message: error.message });
+    logger.error(`/encrypt-user-data: ${error.message}`);
+    logger.error(error);
+    res.json({ success: false, message: error.message });
   }
+});
+
+app.get('/get-addon-config', (req, res) => {
+  res.status(200).json({
+    success: true,
+    maxMovieSize: Settings.MAX_MOVIE_SIZE,
+    maxEpisodeSize: Settings.MAX_EPISODE_SIZE,
+    torrentioDisabled: Settings.DISABLE_TORRENTIO,
+    apiKeyRequired: !!Settings.API_KEY,
+  });
 });
 
 app.get('/health', (req, res) => {
@@ -298,14 +351,31 @@ app.use((req, res) => {
 });
 
 app.listen(Settings.PORT, () => {
-  console.log(`|INF| server > init: Listening on port ${Settings.PORT}`);
+  logger.info(`Listening on port ${Settings.PORT}`);
 });
 
+function getIp(req: Request): string | undefined {
+  return (
+    req.get('X-Client-IP') ||
+    req.get('X-Forwarded-For')?.split(',')[0].trim() ||
+    req.get('X-Real-IP') ||
+    req.get('CF-Connecting-IP') ||
+    req.get('True-Client-IP') ||
+    req.get('X-Forwarded')?.split(',')[0].trim() ||
+    req.get('Forwarded-For')?.split(',')[0].trim() ||
+    req.ip
+  );
+}
 function extractJsonConfig(config: string): Config {
-  if (config.startsWith('E-') || config.startsWith('eyJ')) {
+  if (
+    config.startsWith('eyJ') ||
+    config.startsWith('eyI') ||
+    config.startsWith('B-') ||
+    isValueEncrypted(config)
+  ) {
     return extractEncryptedOrEncodedConfig(config, 'Config');
   }
-  if (CUSTOM_CONFIGS) {
+  if (Settings.CUSTOM_CONFIGS) {
     const customConfig = extractCustomConfig(config);
     if (customConfig) return customConfig;
   }
@@ -313,13 +383,13 @@ function extractJsonConfig(config: string): Config {
 }
 
 function extractCustomConfig(config: string): Config | undefined {
-  const customConfig = CUSTOM_CONFIGS?.[config];
+  const customConfig = Settings.CUSTOM_CONFIGS[config];
   if (!customConfig) return undefined;
-  console.log(
-    `|DBG| server > Found custom config for alias ${config}, attempting to extract config`
+  logger.info(
+    `Found custom config for alias ${config}, attempting to extract config`
   );
   return extractEncryptedOrEncodedConfig(
-    customConfig,
+    decodeURIComponent(customConfig),
     `CustomConfig ${config}`
   );
 }
@@ -328,14 +398,52 @@ function extractEncryptedOrEncodedConfig(
   config: string,
   label: string
 ): Config {
-  let decodedConfig: string;
+  let decodedConfig: Config;
   try {
-    decodedConfig = isValueEncrypted(config)
-      ? decryptValue(config, `${label} (encrypted)`)
-      : Buffer.from(config, 'base64').toString('utf-8');
-    return JSON.parse(decodedConfig);
+    if (config.startsWith('E-')) {
+      // compressed and encrypted (hex)
+      logger.info(`Extracting encrypted (v1) config`);
+      const parts = config.split('-');
+      if (parts.length !== 3) {
+        throw new Error('Invalid encrypted config format');
+      }
+      const iv = Buffer.from(decodeURIComponent(parts[1]), 'hex');
+      const data = Buffer.from(decodeURIComponent(parts[2]), 'hex');
+      decodedConfig = JSON.parse(decompressData(decryptData(data, iv)));
+    } else if (config.startsWith('E2-')) {
+      // minified, crushed, compressed and encrypted (base64)
+      logger.info(`Extracting encrypted (v2) config`);
+      const parts = config.split('-');
+      if (parts.length !== 3) {
+        throw new Error('Invalid encrypted config format');
+      }
+      const iv = Buffer.from(decodeURIComponent(parts[1]), 'base64');
+      const data = Buffer.from(decodeURIComponent(parts[2]), 'base64');
+      const compressedCrushedJson = decryptData(data, iv);
+      const crushedJson = decompressData(compressedCrushedJson);
+      const minifiedConfig = uncrushJson(crushedJson);
+      decodedConfig = unminifyConfig(JSON.parse(minifiedConfig));
+    } else if (config.startsWith('B-')) {
+      // minifed, crushed, compressed, base64 encoded
+      logger.info(`Extracting base64 encoded and compressed config`);
+      decodedConfig = unminifyConfig(
+        JSON.parse(
+          uncrushJson(decompressData(Buffer.from(config.slice(2), 'base64')))
+        )
+      );
+    } else {
+      // plain base64 encoded
+      logger.info(`Extracting plain base64 encoded config`);
+      decodedConfig = JSON.parse(
+        Buffer.from(config, 'base64').toString('utf-8')
+      );
+    }
+    return decodedConfig;
   } catch (error: any) {
-    console.error(`|ERR| Failed to parse ${label}: ${error.message}`);
+    logger.error(`Failed to parse ${label}: ${error.message}`, {
+      func: 'extractJsonConfig',
+    });
+    logger.error(error, { func: 'extractJsonConfig' });
     throw new Error(`Failed to parse ${label}`);
   }
 }
@@ -356,6 +464,13 @@ function decryptEncryptedInfoFromConfig(config: Config): Config {
 
   if (config.mediaFlowConfig) {
     decryptMediaFlowConfig(config.mediaFlowConfig);
+  }
+  if (config.stremThruConfig) {
+    decryptStremThruConfig(config.stremThruConfig);
+  }
+
+  if (config.apiKey) {
+    config.apiKey = decryptValue(config.apiKey, 'aioStreams apiKey');
   }
 
   if (config.addons) {
@@ -393,6 +508,16 @@ function decryptMediaFlowConfig(mediaFlowConfig: {
   mediaFlowConfig.publicIp = decryptValue(publicIp, 'MediaFlow publicIp');
 }
 
+function decryptStremThruConfig(
+  stremThruConfig: Config['stremThruConfig']
+): void {
+  if (!stremThruConfig) return;
+  const { url, credential, publicIp } = stremThruConfig;
+  stremThruConfig.url = decryptValue(url, 'StremThru url');
+  stremThruConfig.credential = decryptValue(credential, 'StremThru credential');
+  stremThruConfig.publicIp = decryptValue(publicIp, 'StremThru publicIp');
+}
+
 function encryptInfoInConfig(config: Config): Config {
   if (config.services) {
     config.services.forEach(
@@ -409,6 +534,16 @@ function encryptInfoInConfig(config: Config): Config {
 
   if (config.mediaFlowConfig) {
     encryptMediaFlowConfig(config.mediaFlowConfig);
+  }
+
+  if (config.stremThruConfig) {
+    encryptStremThruConfig(config.stremThruConfig);
+  }
+
+  if (config.apiKey) {
+    // we can either remove the api key for better security or encrypt it for usability
+    // removing it means the user has to enter it every time upon reconfiguration.
+    config.apiKey = encryptValue(config.apiKey, 'aioStreams apiKey');
   }
 
   if (config.addons) {
@@ -450,6 +585,16 @@ function encryptMediaFlowConfig(mediaFlowConfig: {
   mediaFlowConfig.publicIp = encryptValue(publicIp, 'MediaFlow publicIp');
 }
 
+function encryptStremThruConfig(
+  stremThruConfig: Config['stremThruConfig']
+): void {
+  if (!stremThruConfig) return;
+  const { url, credential, publicIp } = stremThruConfig;
+  stremThruConfig.url = encryptValue(url, 'StremThru url');
+  stremThruConfig.credential = encryptValue(credential, 'StremThru credential');
+  stremThruConfig.publicIp = encryptValue(publicIp, 'StremThru publicIp');
+}
+
 function processObjectValues(
   obj: Record<string, any>,
   labelPrefix: string,
@@ -459,7 +604,7 @@ function processObjectValues(
   Object.keys(obj).forEach((key) => {
     const value = obj[key];
     if (condition(key, value)) {
-      console.log(`|DBG| Processing ${labelPrefix} ${key}`);
+      logger.debug(`Processing ${labelPrefix} ${key}`);
       obj[key] = decrypt
         ? decryptValue(value, `${labelPrefix} ${key}`)
         : encryptValue(value, `${labelPrefix} ${key}`);
@@ -468,11 +613,13 @@ function processObjectValues(
 }
 
 function encryptValue(value: any, label: string): any {
-  if (!isValueEncrypted(value)) {
+  if (value && !isValueEncrypted(value)) {
     try {
-      return compressAndEncrypt(value);
+      const { iv, data } = encryptData(compressData(value));
+      return `E2-${iv}-${data}`;
     } catch (error: any) {
-      console.error(`Failed to encrypt ${label}`);
+      logger.error(`Failed to encrypt ${label}`, { func: 'encryptValue' });
+      logger.error(error, { func: 'encryptValue' });
       return '';
     }
   }
@@ -486,13 +633,12 @@ function decryptValue(value: any, label: string): any {
     if (decrypted === null) throw new Error('Decryption failed');
     return decrypted;
   } catch (error: any) {
-    console.error(`|ERR| Failed to decrypt ${label}: ${error.message}`);
+    logger.error(`Failed to decrypt ${label}: ${error.message}`, {
+      func: 'decryptValue',
+    });
+    logger.error(error, { func: 'decryptValue' });
     throw new Error('Failed to decrypt config');
   }
-}
-
-function isValueEncrypted(value: string | undefined): boolean {
-  return value ? /^E-[0-9a-fA-F]{32}-[0-9a-fA-F]+$/.test(value) : false;
 }
 
 const rootUrl = (req: Request) =>

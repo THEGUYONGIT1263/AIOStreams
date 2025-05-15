@@ -1,10 +1,11 @@
 {
   "name": "aiostreams",
-  "version": "1.12.3",
+  "version": "1.21.1",
   "description": "Stremio addon to combine streams into one addon",
   "main": "dist/server.js",
   "scripts": {
     "test": "npm run test --workspaces",
+    "release": "commit-and-tag-version",
     "format": "prettier --write .",
     "build": "npm -w packages/types run build && npm -w packages/utils run build && npm -w packages/parser run build && npm -w packages/formatters run build && npm -w packages/wrappers run build && npm -w packages/addon run build && npm -w packages/frontend run build",
     "build:watch": "tsc --build --watch",
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@types/node": "^20.14.10",
     "beamup-cli": "^1.3.0",
+    "commit-and-tag-version": "^12.5.0",
     "cross-env": "^7.0.3",
     "prettier": "^3.3.2",
     "tsx": "^4.16.2",
@@ -34,6 +36,7 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
+    "super-regex": "^1.0.0",
     "undici": "^7.2.3"
   }
 }

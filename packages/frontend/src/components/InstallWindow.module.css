@@ -1,0 +1,75 @@
+.popup {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(1);
+  background-color: rgb(0, 0, 0);
+  padding: 20px;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.705);
+  z-index: 1000;
+  opacity: 0.95;
+  border-radius: var(--borderRadius);
+  transition:
+    opacity 0.3s ease-in-out,
+    transform 0.3s ease-in-out;
+  width: 50%;
+  max-width: 500px;
+}
+
+@media screen and (max-width: 600px) {
+  .popup {
+    width: 90%;
+  }
+}
+
+.popup.hidden {
+  transform: translate(-50%, -50%) scale(0);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.installButtons {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 20px;
+}
+
+.installButton {
+  background-color: #ffffff; /* Green */
+  border: none;
+  color: black;
+  padding: 15px 32px;
+  text-align: center;
+  text-decoration: none;
+  display: inline-block;
+  font-size: 16px;
+  margin: 4px 2px;
+  cursor: pointer;
+  border-radius: var(--borderRadius);
+  box-shadow: 0 4px 8px rgba(255, 255, 255, 0.111);
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s,
+    opacity 0.2s,
+    background-color 0.2s;
+}
+
+@media (pointer: fine) {
+  .installButton:hover {
+    transform: scale(1.02);
+    box-shadow: 0 8px 16px rgba(255, 255, 255, 0.225);
+  }
+}
+
+.installButton:active {
+  transform: scale(0.98);
+}
+
+.installButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+  background-color: #ddddddbe;
+}
